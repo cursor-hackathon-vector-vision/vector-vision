@@ -4,12 +4,12 @@ import {
   updateConnectionArcs
 } from './advancedLayout';
 import {
-  CityLayoutEngine,
-  createCityStreets,
-  createDistrictPlates,
-  createDecorations,
-  type CityLayout
-} from './cityLayout';
+  HexLayoutEngine,
+  createHexMesh,
+  createHexStreet,
+  createHexDecorations,
+  type HexLayout
+} from './hexLayout';
 
 /**
  * LIVING CODE ARCHITECTURE
@@ -107,10 +107,10 @@ export class CodeArchitecture {
   // Ground plane
   // Ground removed for cleaner look
   
-  // City layout system
-  private cityLayoutEngine: CityLayoutEngine;
+  // Hex layout system
+  private hexLayoutEngine: HexLayoutEngine;
   private connectionArcs: THREE.Group[] = [];
-  private cityLayout: CityLayout | null = null;
+  private hexLayout: HexLayout | null = null;
   private streetGroup: THREE.Group;
   private districtGroup: THREE.Group;
   private decorationGroup: THREE.Group;
@@ -118,8 +118,8 @@ export class CodeArchitecture {
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     
-    // Initialize city layout engine
-    this.cityLayoutEngine = new CityLayoutEngine(150);
+    // Initialize hex layout engine
+    this.hexLayoutEngine = new HexLayoutEngine(35);
     
     // Create groups
     this.groundGroup = new THREE.Group();
@@ -1006,10 +1006,10 @@ export class CodeArchitecture {
       }
     }
     
-    // === CITY LAYOUT ===
+    // === HEX LAYOUT ===
     
-    // Prepare file data for city layout
-    const cityFileData = snapshot.files.map(f => ({
+    // Prepare file data for hex layout
+    const hexFileData = snapshot.files.map(f => ({
       path: f.path,
       name: f.name,
       directory: f.directory || '/',
@@ -1017,27 +1017,31 @@ export class CodeArchitecture {
       linesOfCode: f.linesOfCode
     }));
     
-    // Calculate city layout
-    this.cityLayout = this.cityLayoutEngine.calculateLayout(cityFileData);
+    // Calculate hex layout
+    this.hexLayout = this.hexLayoutEngine.calculateLayout(hexFileData);
     
-    // Clear and recreate streets
+    // Clear and recreate elements
     this.clearCityElements();
     
-    // Create streets
-    const streetsGroup = createCityStreets(this.cityLayout.streets);
-    this.streetGroup.add(streetsGroup);
+    // Create streets with dashed lines and sidewalks
+    for (const street of this.hexLayout.streets) {
+      const streetMesh = createHexStreet(street);
+      this.streetGroup.add(streetMesh);
+    }
     
-    // Create district plates
-    const districtsGroup = createDistrictPlates(this.cityLayout.districts);
-    this.districtGroup.add(districtsGroup);
+    // Create hex district markers
+    for (const hex of this.hexLayout.hexes) {
+      const hexMesh = createHexMesh(hex);
+      this.districtGroup.add(hexMesh);
+    }
     
-    // Create decorations (trees, lamps, benches, fountain)
-    const decorationsGroup = createDecorations(this.cityLayout.decorations);
+    // Create decorations (trees, lamps)
+    const decorationsGroup = createHexDecorations(this.hexLayout.decorations);
     this.decorationGroup.add(decorationsGroup);
     
-    // Create position lookup from city layout
+    // Create position lookup from hex layout
     const positionMap = new Map<string, { pos: THREE.Vector3; rotation: number }>();
-    for (const pos of this.cityLayout.buildings) {
+    for (const pos of this.hexLayout.buildings) {
       positionMap.set(pos.file.path, { 
         pos: new THREE.Vector3(pos.x, 0, pos.z),
         rotation: pos.rotation
