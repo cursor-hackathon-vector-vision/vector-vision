@@ -13,6 +13,13 @@ import {
   type GridLayout
 } from './simpleGrid';
 import {
+  GrowingGridEngine,
+  renderGrowingGrid,
+  animateConnections,
+  createPathLamp,
+  type GrowingGridLayout
+} from './growingGrid';
+import {
   MessageTimelineEngine,
   type MessageTimelineLayout,
   type MessageData,
@@ -144,9 +151,13 @@ export class CodeArchitecture {
   private connectionArcs: THREE.Group[] = [];
   private growingLayout: GrowingLayout | null = null;
   
-  // NEW: Simple Manhattan grid system
+  // Simple Manhattan grid system (backup)
   private simpleGridEngine: SimpleGridEngine;
   private gridLayout: GridLayout | null = null;
+  
+  // NEW: Growing grid with connections
+  private growingGridEngine: GrowingGridEngine;
+  private growingGridLayout: GrowingGridLayout | null = null;
   
   private streetGroup: THREE.Group;
   private districtGroup: THREE.Group;
@@ -158,6 +169,7 @@ export class CodeArchitecture {
     // Initialize layout engines
     this.growingCityEngine = new GrowingCityEngine();
     this.simpleGridEngine = new SimpleGridEngine();
+    this.growingGridEngine = new GrowingGridEngine();
     this.messageTimelineEngine = new MessageTimelineEngine();
     
     // Create groups
@@ -1068,8 +1080,10 @@ export class CodeArchitecture {
   }
   
   /**
-   * Full city rebuild using SIMPLE MANHATTAN GRID
-   * Based on procedural city generation research
+   * Full city rebuild using GROWING GRID
+   * - Spiral growth pattern from center
+   * - Narrow cat paths between buildings
+   * - Colored connection paths for imports/functions
    */
   private async rebuildCityLayout(
     snapshot: ProjectSnapshot,
@@ -1087,17 +1101,29 @@ export class CodeArchitecture {
       }
     }
     
-    // Calculate SIMPLE GRID layout
-    this.gridLayout = this.simpleGridEngine.calculateLayout(snapshot.files.length);
+    // Prepare file data with imports for connections
+    const filesWithImports = snapshot.files.map(f => ({
+      path: f.path,
+      imports: fileContents?.[f.path]?.imports || []
+    }));
     
-    // Render the grid (streets, sidewalks, lamps, trees)
-    renderGridScene(this.gridLayout, this.streetGroup, this.decorationGroup);
+    // Calculate GROWING GRID layout with connections
+    this.growingGridLayout = this.growingGridEngine.calculateLayout(
+      filesWithImports,
+      snapshot.files.length  // All files visible
+    );
     
-    // Place buildings on grid
-    const buildingSpots = this.gridLayout.buildingSpots;
-    let spotIndex = 0;
+    // Render the grid (cat paths) and connections (colored lines)
+    renderGrowingGrid(this.growingGridLayout, this.streetGroup, this.connectionGroup);
     
-    for (const file of snapshot.files) {
+    // Add some lamps at path intersections
+    this.addPathLamps();
+    
+    // Place buildings on grid positions
+    for (const gridBuilding of this.growingGridLayout.buildings) {
+      const file = snapshot.files.find(f => f.path === gridBuilding.id);
+      if (!file) continue;
+      
       const fileWithContent: FileWithContent = { ...file };
       
       if (fileContents && fileContents[file.path]) {
@@ -1107,9 +1133,7 @@ export class CodeArchitecture {
         fileWithContent.imports = fileContents[file.path].imports;
       }
       
-      // Get next available spot on grid
-      const spot = buildingSpots[spotIndex % buildingSpots.length];
-      const position = new THREE.Vector3(spot.x, 0.15, spot.z);
+      const position = new THREE.Vector3(gridBuilding.worldX, 0.15, gridBuilding.worldZ);
       const rotation = 0; // Align to grid
       
       if (this.buildings.has(file.path)) {
@@ -1117,14 +1141,30 @@ export class CodeArchitecture {
       } else {
         this.createBuilding(fileWithContent, position, rotation);
       }
-      
-      spotIndex++;
     }
     
-    console.log('[City] Simple grid rebuild took', (performance.now() - startTime).toFixed(1), 'ms');
-    console.log('[City] Grid:', this.gridLayout.gridWidth, 'x', this.gridLayout.gridHeight, 
-                'Roads:', this.gridLayout.roads.length, 
-                'Building spots:', buildingSpots.length);
+    console.log('[City] Growing grid rebuild took', (performance.now() - startTime).toFixed(1), 'ms');
+    console.log('[City] Buildings:', this.growingGridLayout.buildings.length,
+                'Paths:', this.growingGridLayout.paths.length,
+                'Connections:', this.growingGridLayout.connections.length);
+  }
+  
+  /**
+   * Add lamps at some path intersections
+   */
+  private addPathLamps(): void {
+    if (!this.growingGridLayout) return;
+    
+    // Add lamps at every few buildings
+    this.growingGridLayout.buildings.forEach((building, index) => {
+      if (index % 4 === 0) {
+        const lamp = createPathLamp(
+          building.worldX + 2,
+          building.worldZ + 2
+        );
+        this.decorationGroup.add(lamp);
+      }
+    });
   }
   
   /**
@@ -2270,6 +2310,11 @@ export class CodeArchitecture {
     
     // Update street light flickering
     this.updateStreetLightFlicker();
+    
+    // Animate connection paths (pulse effect)
+    if (this.frameCount % 6 === 0) {
+      animateConnections(this.connectionGroup, this.time);
+    }
     
     // Update connection arc animations
     updateConnectionArcs(this.connectionArcs, this.time);
