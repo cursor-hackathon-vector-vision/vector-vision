@@ -9,9 +9,14 @@ import {
 import {
   createStreetNetwork,
   addStreetNetworkToScene,
-  createRoadsideTrees,
   type StreetNetwork
 } from './streetSystem';
+import {
+  SemanticLayoutEngine,
+  createChatTree,
+  createBranchRoad,
+  type ChatEntry
+} from './semanticLayout';
 
 /**
  * LIVING CODE ARCHITECTURE
@@ -111,18 +116,22 @@ export class CodeArchitecture {
   
   // Advanced layout system
   private layoutEngine: AdvancedLayoutEngine;
+  private semanticEngine: SemanticLayoutEngine;
   private districts: THREE.Group[] = [];
   private connectionArcs: THREE.Group[] = [];
   private layoutStreets: THREE.Mesh[] = [];
   private streetNetwork: StreetNetwork | null = null;
+  private chatTrees: THREE.Group[] = [];
+  private branchRoads: THREE.Group[] = [];
   private districtGroup: THREE.Group;
   private streetGroup: THREE.Group;
   
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     
-    // Initialize advanced layout engine - size matches ground plane
+    // Initialize layout engines
     this.layoutEngine = new AdvancedLayoutEngine(400, 400, 4);
+    this.semanticEngine = new SemanticLayoutEngine(400);
     
     // Create groups
     this.groundGroup = new THREE.Group();
@@ -1099,9 +1108,52 @@ export class CodeArchitecture {
     this.streetNetwork = createStreetNetwork(districtBounds, 400, 400);
     addStreetNetworkToScene(this.streetNetwork, this.streetGroup, this.effectsGroup);
     
-    // Add roadside trees for atmosphere
-    const trees = createRoadsideTrees(400, 12, 2);
-    this.streetGroup.add(trees);
+    // === SEMANTIC LAYOUT: Chat Trees & Branch Roads ===
+    
+    // Convert chats to ChatEntry format (convert Date to number)
+    const chatEntries: ChatEntry[] = snapshot.chats.map(chat => ({
+      role: chat.role as 'user' | 'assistant' | 'tool',
+      content: chat.content,
+      timestamp: chat.timestamp instanceof Date ? chat.timestamp.getTime() : Date.now(),
+      relatedFiles: chat.relatedFiles
+    }));
+    
+    // Calculate semantic layout (convert Date to number)
+    const semanticFileData = snapshot.files.map(f => ({
+      path: f.path,
+      name: f.name,
+      directory: f.directory || '/',
+      extension: f.extension,
+      linesOfCode: f.linesOfCode,
+      imports: fileContents?.[f.path]?.imports || [],
+      createdAt: f.createdAt instanceof Date ? f.createdAt.getTime() : undefined,
+      modifiedAt: f.modifiedAt instanceof Date ? f.modifiedAt.getTime() : undefined
+    }));
+    
+    const semanticLayout = this.semanticEngine.calculateLayout(semanticFileData, chatEntries);
+    
+    // Clear old chat trees and branch roads
+    this.clearChatTrees();
+    this.clearBranchRoads();
+    
+    // Create chat trees (each chat = a tree along the road)
+    for (const treePos of semanticLayout.chatTrees) {
+      const tree = createChatTree(
+        treePos,
+        () => this.createPineTreeMesh(),
+        () => this.createRoundTreeMesh(),
+        () => this.createCyberTreeMesh()
+      );
+      this.streetGroup.add(tree);
+      this.chatTrees.push(tree);
+    }
+    
+    // Create branch roads for directories
+    for (const branch of semanticLayout.branches) {
+      const branchRoad = createBranchRoad(branch);
+      this.streetGroup.add(branchRoad);
+      this.branchRoads.push(branchRoad);
+    }
     
     // Create position lookup
     const positionMap = new Map<string, THREE.Vector3>();
@@ -1877,6 +1929,154 @@ export class CodeArchitecture {
     this.streetNetwork.dataParticles.geometry.dispose();
     
     this.streetNetwork = null;
+  }
+  
+  private clearChatTrees(): void {
+    for (const tree of this.chatTrees) {
+      this.streetGroup.remove(tree);
+      tree.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          if (child.material instanceof THREE.Material) {
+            child.material.dispose();
+          }
+        }
+      });
+    }
+    this.chatTrees = [];
+  }
+  
+  private clearBranchRoads(): void {
+    for (const road of this.branchRoads) {
+      this.streetGroup.remove(road);
+      road.traverse((child) => {
+        if (child instanceof THREE.Mesh || child instanceof THREE.Sprite) {
+          if (child instanceof THREE.Mesh) {
+            child.geometry.dispose();
+          }
+          if (child.material instanceof THREE.Material) {
+            child.material.dispose();
+          }
+        }
+      });
+    }
+    this.branchRoads = [];
+  }
+  
+  // Tree factory methods for semantic layout
+  private createPineTreeMesh(): THREE.Group {
+    const group = new THREE.Group();
+    
+    // Trunk
+    const trunkGeom = new THREE.CylinderGeometry(0.15, 0.25, 1.5, 6);
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0x4a3728,
+      roughness: 0.9,
+      flatShading: true,
+    });
+    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.position.y = 0.75;
+    group.add(trunk);
+    
+    // Foliage (User messages = green pine)
+    const foliageMat = new THREE.MeshStandardMaterial({
+      color: 0x2d5a27,
+      roughness: 0.8,
+      flatShading: true,
+      emissive: new THREE.Color(0x1a3a1a),
+      emissiveIntensity: 0.2,
+    });
+    
+    const layers = [
+      { radius: 1.2, height: 2, y: 2 },
+      { radius: 0.9, height: 1.8, y: 3.2 },
+      { radius: 0.6, height: 1.5, y: 4.2 },
+    ];
+    
+    for (const layer of layers) {
+      const coneGeom = new THREE.ConeGeometry(layer.radius, layer.height, 6);
+      const cone = new THREE.Mesh(coneGeom, foliageMat);
+      cone.position.y = layer.y;
+      group.add(cone);
+    }
+    
+    return group;
+  }
+  
+  private createRoundTreeMesh(): THREE.Group {
+    const group = new THREE.Group();
+    
+    // Trunk
+    const trunkGeom = new THREE.CylinderGeometry(0.2, 0.3, 2, 6);
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0x5c4033,
+      roughness: 0.9,
+      flatShading: true,
+    });
+    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.position.y = 1;
+    group.add(trunk);
+    
+    // Foliage (Assistant messages = blue-ish)
+    const foliageGeom = new THREE.IcosahedronGeometry(1.5, 0);
+    const foliageMat = new THREE.MeshStandardMaterial({
+      color: 0x4a7a9a, // Blue-green for assistant
+      roughness: 0.8,
+      flatShading: true,
+      emissive: new THREE.Color(0x2a4a6a),
+      emissiveIntensity: 0.2,
+    });
+    const foliage = new THREE.Mesh(foliageGeom, foliageMat);
+    foliage.position.y = 3;
+    foliage.scale.set(1, 1.2, 1);
+    group.add(foliage);
+    
+    return group;
+  }
+  
+  private createCyberTreeMesh(): THREE.Group {
+    const group = new THREE.Group();
+    
+    // Metallic trunk
+    const trunkGeom = new THREE.CylinderGeometry(0.1, 0.2, 2.5, 8);
+    const trunkMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a3a,
+      roughness: 0.3,
+      metalness: 0.8,
+    });
+    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.position.y = 1.25;
+    group.add(trunk);
+    
+    // Glowing crystal (Tool calls = orange/yellow)
+    const crystalGeom = new THREE.OctahedronGeometry(1, 0);
+    const crystalMat = new THREE.MeshBasicMaterial({
+      color: 0xffaa00,
+      transparent: true,
+      opacity: 0.7,
+    });
+    const crystal = new THREE.Mesh(crystalGeom, crystalMat);
+    crystal.position.y = 3.5;
+    crystal.scale.set(0.8, 1.5, 0.8);
+    group.add(crystal);
+    
+    // Inner glow
+    const innerGeom = new THREE.OctahedronGeometry(0.5, 0);
+    const innerMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const inner = new THREE.Mesh(innerGeom, innerMat);
+    inner.position.y = 3.5;
+    group.add(inner);
+    
+    // Small point light
+    const light = new THREE.PointLight(0xffaa00, 0.5, 8);
+    light.position.y = 3.5;
+    group.add(light);
+    
+    return group;
   }
   
   private removeBuilding(building: CodeBuilding): void {
