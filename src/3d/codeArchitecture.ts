@@ -5,10 +5,13 @@ import {
 } from './advancedLayout';
 import {
   GrowingCityEngine,
-  createGrowingRoad,
-  createGrowingDecorations,
   type GrowingLayout
 } from './growingCity';
+import {
+  SimpleGridEngine,
+  renderGridScene,
+  type GridLayout
+} from './simpleGrid';
 import {
   MessageTimelineEngine,
   type MessageTimelineLayout,
@@ -136,10 +139,15 @@ export class CodeArchitecture {
   // Ground plane
   // Ground removed for cleaner look
   
-  // Growing city layout system
+  // Growing city layout system (legacy - for building positions)
   private growingCityEngine: GrowingCityEngine;
   private connectionArcs: THREE.Group[] = [];
   private growingLayout: GrowingLayout | null = null;
+  
+  // NEW: Simple Manhattan grid system
+  private simpleGridEngine: SimpleGridEngine;
+  private gridLayout: GridLayout | null = null;
+  
   private streetGroup: THREE.Group;
   private districtGroup: THREE.Group;
   private decorationGroup: THREE.Group;
@@ -147,10 +155,9 @@ export class CodeArchitecture {
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     
-    // Initialize growing city layout engine
+    // Initialize layout engines
     this.growingCityEngine = new GrowingCityEngine();
-    
-    // Initialize message timeline engine
+    this.simpleGridEngine = new SimpleGridEngine();
     this.messageTimelineEngine = new MessageTimelineEngine();
     
     // Create groups
@@ -1061,7 +1068,8 @@ export class CodeArchitecture {
   }
   
   /**
-   * Full city rebuild (expensive - only when project structure changes)
+   * Full city rebuild using SIMPLE MANHATTAN GRID
+   * Based on procedural city generation research
    */
   private async rebuildCityLayout(
     snapshot: ProjectSnapshot,
@@ -1079,42 +1087,16 @@ export class CodeArchitecture {
       }
     }
     
-    // Prepare file data
-    const growingFileData = snapshot.files.map(f => ({
-      path: f.path,
-      name: f.name,
-      directory: f.directory || '/',
-      extension: f.extension,
-      linesOfCode: f.linesOfCode,
-      createdAt: f.createdAt instanceof Date ? f.createdAt.getTime() : undefined
-    }));
+    // Calculate SIMPLE GRID layout
+    this.gridLayout = this.simpleGridEngine.calculateLayout(snapshot.files.length);
     
-    // Calculate layout ONCE
-    this.growingLayout = this.growingCityEngine.calculateLayout(growingFileData);
+    // Render the grid (streets, sidewalks, lamps, trees)
+    renderGridScene(this.gridLayout, this.streetGroup, this.decorationGroup);
     
-    // Clear and recreate
-    this.clearCityElements();
+    // Place buildings on grid
+    const buildingSpots = this.gridLayout.buildingSpots;
+    let spotIndex = 0;
     
-    // Create roads
-    for (const road of this.growingLayout.roads) {
-      const roadMesh = createGrowingRoad(road);
-      this.streetGroup.add(roadMesh);
-    }
-    
-    // Create ALL decorations - no limits!
-    const decorationsGroup = createGrowingDecorations(this.growingLayout.decorations);
-    this.decorationGroup.add(decorationsGroup);
-    
-    // Create position lookup
-    const positionMap = new Map<string, { pos: THREE.Vector3; rotation: number }>();
-    for (const pos of this.growingLayout.buildings) {
-      positionMap.set(pos.file.path, { 
-        pos: new THREE.Vector3(pos.x, 0.15, pos.z),
-        rotation: pos.rotation
-      });
-    }
-    
-    // Create ALL buildings - no limits!
     for (const file of snapshot.files) {
       const fileWithContent: FileWithContent = { ...file };
       
@@ -1125,21 +1107,24 @@ export class CodeArchitecture {
         fileWithContent.imports = fileContents[file.path].imports;
       }
       
-      const posData = positionMap.get(file.path);
-      const position = posData?.pos || new THREE.Vector3();
-      const rotation = posData?.rotation || 0;
+      // Get next available spot on grid
+      const spot = buildingSpots[spotIndex % buildingSpots.length];
+      const position = new THREE.Vector3(spot.x, 0.15, spot.z);
+      const rotation = 0; // Align to grid
       
       if (this.buildings.has(file.path)) {
         this.updateBuilding(fileWithContent, position, rotation);
       } else {
         this.createBuilding(fileWithContent, position, rotation);
       }
+      
+      spotIndex++;
     }
     
-    // Skip connections during playback (expensive)
-    // this.updateConnections(fileContents);
-    
-    console.log('[City] Full rebuild took', (performance.now() - startTime).toFixed(1), 'ms');
+    console.log('[City] Simple grid rebuild took', (performance.now() - startTime).toFixed(1), 'ms');
+    console.log('[City] Grid:', this.gridLayout.gridWidth, 'x', this.gridLayout.gridHeight, 
+                'Roads:', this.gridLayout.roads.length, 
+                'Building spots:', buildingSpots.length);
   }
   
   /**
@@ -2457,8 +2442,8 @@ export class CodeArchitecture {
     // Render all timeline elements (but hidden initially)
     this.renderTimelineElementsOptimized(this.timelineLayout);
     
-    // Render districts ONCE
-    this.renderDistricts(this.timelineLayout);
+    // NOTE: District streets/decorations now handled by Simple Grid in rebuildCityLayout
+    // this.renderDistricts(this.timelineLayout);
     
     // Spawn animals ONCE
     this.spawnAnimals(this.timelineLayout);
@@ -2899,25 +2884,49 @@ export class CodeArchitecture {
   }
   
   /**
-   * Create simple lamp (for district decoration)
+   * Create simple streetlamp (for district decoration)
+   * Smaller, more realistic proportions
    */
   private createSimpleLamp(scale: number): THREE.Group {
     const lamp = new THREE.Group();
     
-    const poleGeom = new THREE.CylinderGeometry(0.1 * scale, 0.1 * scale, 3 * scale, 6);
-    const poleMat = new THREE.MeshStandardMaterial({ color: 0x333344 });
+    // Shorter, thinner pole
+    const poleHeight = 2.5 * scale;
+    const poleGeom = new THREE.CylinderGeometry(0.05 * scale, 0.08 * scale, poleHeight, 6);
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x2a2a3a });
     const pole = new THREE.Mesh(poleGeom, poleMat);
-    pole.position.y = 1.5 * scale;
+    pole.position.y = poleHeight / 2;
     lamp.add(pole);
     
-    const bulbGeom = new THREE.SphereGeometry(0.3 * scale, 8, 8);
-    const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffcc66 });
+    // Lamp arm
+    const armGeom = new THREE.CylinderGeometry(0.03 * scale, 0.03 * scale, 0.4 * scale, 4);
+    const arm = new THREE.Mesh(armGeom, poleMat);
+    arm.rotation.z = Math.PI / 2;
+    arm.position.set(0.2 * scale, poleHeight - 0.1, 0);
+    lamp.add(arm);
+    
+    // Lamp housing (cone pointing down)
+    const housingGeom = new THREE.ConeGeometry(0.15 * scale, 0.2 * scale, 6);
+    const housingMat = new THREE.MeshStandardMaterial({ color: 0x333344 });
+    const housing = new THREE.Mesh(housingGeom, housingMat);
+    housing.rotation.x = Math.PI; // Point down
+    housing.position.set(0.4 * scale, poleHeight - 0.15, 0);
+    lamp.add(housing);
+    
+    // Small glowing bulb
+    const bulbGeom = new THREE.SphereGeometry(0.08 * scale, 6, 6);
+    const bulbMat = new THREE.MeshBasicMaterial({ 
+      color: 0xffdd88,
+      transparent: true,
+      opacity: 0.9
+    });
     const bulb = new THREE.Mesh(bulbGeom, bulbMat);
-    bulb.position.y = 3 * scale;
+    bulb.position.set(0.4 * scale, poleHeight - 0.25, 0);
     lamp.add(bulb);
     
-    const light = new THREE.PointLight(0xffcc66, 2, 10 * scale);
-    light.position.y = 3 * scale;
+    // Subtle light (reduced intensity)
+    const light = new THREE.PointLight(0xffdd88, 0.5, 5 * scale);
+    light.position.set(0.4 * scale, poleHeight - 0.25, 0);
     lamp.add(light);
     
     return lamp;
