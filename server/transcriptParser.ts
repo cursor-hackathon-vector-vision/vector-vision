@@ -41,22 +41,35 @@ export interface Transcript {
 
 /**
  * Find the Cursor projects folder for a given workspace path
+ * Tries the exact path first, then parent directories
  */
 export function findCursorProjectsFolder(workspacePath: string): string | null {
-  // Convert workspace path to Cursor folder name format
-  // e.g., /mnt/private1/ai-projects/foo -> mnt-private1-ai-projects-foo
-  const folderName = workspacePath.replace(/^\//, '').replace(/\//g, '-');
-  const cursorFolder = path.join(
-    process.env.HOME || '~',
-    '.cursor',
-    'projects',
-    folderName
-  );
+  const homeDir = process.env.HOME || '/home/' + process.env.USER || '~';
+  const cursorProjectsBase = path.join(homeDir, '.cursor', 'projects');
   
-  if (fs.existsSync(cursorFolder)) {
-    return cursorFolder;
+  // Try the exact path and parent paths
+  let currentPath = workspacePath;
+  const triedPaths: string[] = [];
+  
+  for (let i = 0; i < 5; i++) {
+    // Convert workspace path to Cursor folder name format
+    // e.g., /mnt/private1/ai-projects/foo -> mnt-private1-ai-projects-foo
+    const folderName = currentPath.replace(/^\//, '').replace(/\//g, '-');
+    const cursorFolder = path.join(cursorProjectsBase, folderName);
+    triedPaths.push(cursorFolder);
+    
+    if (fs.existsSync(cursorFolder)) {
+      console.log('[TranscriptParser] Found Cursor folder:', cursorFolder);
+      return cursorFolder;
+    }
+    
+    // Try parent directory
+    const parentPath = path.dirname(currentPath);
+    if (parentPath === currentPath) break; // Reached root
+    currentPath = parentPath;
   }
   
+  console.log('[TranscriptParser] Tried paths:', triedPaths);
   return null;
 }
 
