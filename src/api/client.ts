@@ -63,6 +63,9 @@ export interface CursorChat {
   content: string;
   model?: string;
   relatedFiles: string[];
+  tokenCost?: number;
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export interface CursorData {

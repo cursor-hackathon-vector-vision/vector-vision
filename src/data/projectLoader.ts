@@ -1,4 +1,4 @@
-import { api, ProjectScanResult, GitCommit } from '../api/client';
+import { api, ProjectScanResult } from '../api/client';
 import type { ProjectData, ProjectSnapshot, FileNode } from '../types';
 
 /**
@@ -23,135 +23,147 @@ function convertToProjectData(result: ProjectScanResult): ProjectData {
 }
 
 function buildSnapshots(result: ProjectScanResult): ProjectSnapshot[] {
-  const { files, gitHistory, cursorData } = result;
+  const { files, cursorData } = result;
   
-  // If we have git history, use it to create snapshots
-  if (gitHistory.isGitRepo && gitHistory.commits.length > 0) {
-    return buildSnapshotsFromGit(files, gitHistory.commits, cursorData.chats);
+  // PRIORITY: Use MESSAGES as timeline steps (much more granular!)
+  // Each message = one snapshot step
+  if (cursorData.chats.length > 0) {
+    console.log('[Snapshots] Building from MESSAGES:', cursorData.chats.length, 'messages');
+    return buildSnapshotsFromMessages(files, cursorData.chats);
   }
   
-  // Otherwise, create snapshots from file modification times
-  return buildSnapshotsFromFiles(files, cursorData.chats);
+  // Fallback: Use file modification times
+  console.log('[Snapshots] No messages, falling back to file dates');
+  return buildSnapshotsFromFiles(files, []);
 }
 
-function buildSnapshotsFromGit(
+/**
+ * BUILD SNAPSHOTS FROM MESSAGES - Each message = one timeline step!
+ * This creates MANY more granular snapshots for smooth animation.
+ */
+function buildSnapshotsFromMessages(
   allFiles: ProjectScanResult['files'],
-  commits: GitCommit[],
   chats: ProjectScanResult['cursorData']['chats']
 ): ProjectSnapshot[] {
   const snapshots: ProjectSnapshot[] = [];
   
-  // Map files by path for quick lookup
-  const fileMap = new Map(allFiles.map(f => [f.relativePath, f]));
+  // Sort chats by timestamp
+  const sortedChats = [...chats].sort((a, b) => 
+    new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
   
-  // Process commits in chronological order (oldest first)
-  const sortedCommits = [...commits].reverse();
+  // Prepare all files as FileNode format
+  const allFileNodes: FileNode[] = allFiles.map(f => ({
+    path: f.relativePath,
+    name: f.name,
+    extension: f.extension,
+    linesOfCode: f.linesOfCode,
+    directory: f.directory,
+    createdAt: new Date(f.createdAt),
+    modifiedAt: new Date(f.modifiedAt),
+    status: 'unchanged' as const
+  }));
   
-  // Track cumulative files
-  const cumulativeFiles = new Map<string, FileNode>();
+  // Track which files have "appeared" in the timeline
+  const appearedFiles = new Set<string>();
+  const cumulativeFiles: FileNode[] = [];
   
-  for (const commit of sortedCommits) {
-    const commitDate = new Date(commit.date);
+  // Calculate time span for distributing files (used for progressive file appearance)
+  const _firstTime = sortedChats.length > 0 ? new Date(sortedChats[0].timestamp).getTime() : Date.now();
+  const _lastTime = sortedChats.length > 0 ? new Date(sortedChats[sortedChats.length - 1].timestamp).getTime() : Date.now();
+  void _firstTime; void _lastTime; // Available for future use
+  
+  // Distribute files across the timeline (files "appear" progressively)
+  const filesPerMessage = Math.max(1, Math.ceil(allFileNodes.length / Math.max(sortedChats.length, 1)));
+  let fileIndex = 0;
+  
+  // Create a snapshot for EACH message
+  for (let i = 0; i < sortedChats.length; i++) {
+    const chat = sortedChats[i];
+    const chatTime = new Date(chat.timestamp);
     
-    // Apply changes from this commit
-    for (const change of commit.files) {
-      if (change.status === 'deleted') {
-        cumulativeFiles.delete(change.path);
-      } else {
-        const existingFile = fileMap.get(change.path);
-        if (existingFile) {
-          cumulativeFiles.set(change.path, {
-            path: change.path,
-            name: existingFile.name,
-            extension: existingFile.extension,
-            linesOfCode: existingFile.linesOfCode,
-            directory: existingFile.directory,
-            createdAt: new Date(existingFile.createdAt),
-            modifiedAt: commitDate,
-            status: change.status === 'added' ? 'added' : 'modified'
-          });
-        } else {
-          // File was in commit but not in current scan (maybe deleted later)
-          const parts = change.path.split('/');
-          const name = parts[parts.length - 1];
-          const ext = name.includes('.') ? '.' + name.split('.').pop() : '';
-          
-          cumulativeFiles.set(change.path, {
-            path: change.path,
-            name,
-            extension: ext,
-            linesOfCode: (change.additions || 0) + (change.deletions || 0),
-            directory: parts.slice(0, -1).join('/') || '/',
-            createdAt: commitDate,
-            modifiedAt: commitDate,
-            status: change.status === 'added' ? 'added' : 'modified'
-          });
-        }
+    // Add related files from this message if they exist
+    for (const relPath of chat.relatedFiles || []) {
+      const file = allFileNodes.find(f => f.path.endsWith(relPath) || relPath.endsWith(f.name));
+      if (file && !appearedFiles.has(file.path)) {
+        appearedFiles.add(file.path);
+        cumulativeFiles.push({ ...file, status: 'added' });
       }
     }
     
-    // Find chats related to this commit (within 1 hour)
-    const relatedChats = chats.filter(chat => {
-      const chatDate = new Date(chat.timestamp);
-      const diffMs = Math.abs(chatDate.getTime() - commitDate.getTime());
-      return diffMs < 3600000; // 1 hour
-    }).map(chat => ({
-      id: chat.id,
-      timestamp: new Date(chat.timestamp),
-      role: chat.role as 'user' | 'assistant',
-      content: chat.content,
-      relatedFiles: chat.relatedFiles,
-      model: chat.model
+    // Also add some files progressively (to fill in files without related messages)
+    const filesToAdd = Math.min(filesPerMessage, allFileNodes.length - fileIndex);
+    for (let j = 0; j < filesToAdd; j++) {
+      const file = allFileNodes[fileIndex + j];
+      if (file && !appearedFiles.has(file.path)) {
+        appearedFiles.add(file.path);
+        cumulativeFiles.push({ ...file, status: 'added' });
+      }
+    }
+    fileIndex += filesToAdd;
+    
+    // Collect all chats up to this point
+    const chatsUpToNow = sortedChats.slice(0, i + 1).map(c => ({
+      id: c.id,
+      timestamp: new Date(c.timestamp),
+      role: c.role as 'user' | 'assistant',
+      content: c.content,
+      relatedFiles: c.relatedFiles || [],
+      model: c.model,
+      tokenCost: c.tokenCost
     }));
     
-    // Create snapshot
-    const snapshotFiles = Array.from(cumulativeFiles.values()).map(f => ({ ...f }));
+    // Create snapshot for THIS message
+    const snapshotFiles = cumulativeFiles.map(f => ({ ...f }));
     
-    // Reset status for next iteration
-    cumulativeFiles.forEach(f => f.status = 'unchanged');
+    // Determine a short "commit message" from the chat content
+    const shortContent = chat.content.slice(0, 100) + (chat.content.length > 100 ? '...' : '');
     
     snapshots.push({
-      timestamp: commitDate,
-      commitHash: commit.hash,
-      commitMessage: commit.message,
-      author: commit.author,
+      timestamp: chatTime,
+      commitHash: `msg-${i}`,
+      commitMessage: `${chat.role === 'user' ? '💬' : '🤖'} ${shortContent}`,
+      author: chat.role === 'user' ? 'User' : 'Assistant',
       files: snapshotFiles,
-      chats: relatedChats,
+      chats: chatsUpToNow,
       terminalCommands: []
     });
+    
+    // Reset file status for next iteration
+    cumulativeFiles.forEach(f => f.status = 'unchanged');
   }
   
-  // Add final snapshot with current state if different from last commit
-  if (allFiles.length > cumulativeFiles.size) {
-    const finalFiles: FileNode[] = allFiles.map(f => ({
-      path: f.relativePath,
-      name: f.name,
-      extension: f.extension,
-      linesOfCode: f.linesOfCode,
-      directory: f.directory,
-      createdAt: new Date(f.createdAt),
-      modifiedAt: new Date(f.modifiedAt),
-      status: cumulativeFiles.has(f.relativePath) ? 'unchanged' : 'added'
-    }));
+  // Make sure all remaining files appear in final snapshot
+  if (fileIndex < allFileNodes.length) {
+    for (let j = fileIndex; j < allFileNodes.length; j++) {
+      const file = allFileNodes[j];
+      if (!appearedFiles.has(file.path)) {
+        appearedFiles.add(file.path);
+        cumulativeFiles.push({ ...file, status: 'added' });
+      }
+    }
     
+    // Add final snapshot with all files
     snapshots.push({
       timestamp: new Date(),
-      commitHash: 'current',
-      commitMessage: 'Current state (uncommitted)',
-      author: 'Local',
-      files: finalFiles,
-      chats: chats.map(c => ({
+      commitHash: 'final',
+      commitMessage: '✅ Current state',
+      author: 'System',
+      files: cumulativeFiles.map(f => ({ ...f })),
+      chats: sortedChats.map(c => ({
         id: c.id,
         timestamp: new Date(c.timestamp),
         role: c.role as 'user' | 'assistant',
         content: c.content,
-        relatedFiles: c.relatedFiles,
-        model: c.model
+        relatedFiles: c.relatedFiles || [],
+        model: c.model,
+        tokenCost: c.tokenCost
       })),
       terminalCommands: []
     });
   }
   
+  console.log('[Snapshots] Created', snapshots.length, 'snapshots from messages');
   return snapshots;
 }
 
