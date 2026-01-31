@@ -2419,6 +2419,8 @@ export class CodeArchitecture {
    * The new way - messages drive the visualization!
    */
   public updateWithMessageTimeline(snapshot: ProjectSnapshot): void {
+    console.log('[MessageTimeline] Starting update with', snapshot.chats.length, 'chats and', snapshot.files.length, 'files');
+    
     // Convert data to timeline format
     const messages: MessageData[] = snapshot.chats.map(chat => ({
       id: chat.id,
@@ -2435,28 +2437,41 @@ export class CodeArchitecture {
       directory: file.path.split('/').slice(0, -1).join('/'),
       extension: file.extension,
       linesOfCode: file.linesOfCode || 0,
-      createdAt: snapshot.timestamp.getTime(), // Use snapshot timestamp as proxy
+      createdAt: snapshot.timestamp.getTime(),
     }));
     
     // Calculate new layout
     this.timelineLayout = this.messageTimelineEngine.calculateLayout(messages, files);
+    
+    console.log('[MessageTimeline] Layout generated:', {
+      timelineElements: this.timelineLayout.timeline.length,
+      districts: this.timelineLayout.districts.length,
+      animalSpawns: this.timelineLayout.animals.length,
+    });
     
     // Clear old timeline elements
     this.timelineGroup.clear();
     this.messageMarkers.clear();
     this.tokenTrees.clear();
     
+    // Clear old animals from decoration group
+    this.animals.forEach(animal => {
+      this.decorationGroup.remove(animal.group);
+    });
+    this.animals = [];
+    
     // Render timeline elements (messages + trees)
     this.renderTimelineElements(this.timelineLayout);
+    console.log('[MessageTimeline] Rendered', this.messageMarkers.size, 'messages and', this.tokenTrees.size, 'trees');
     
     // Render districts
     this.renderDistricts(this.timelineLayout);
     
-    // Spawn animals
+    // Spawn animals (NEW system - additional to existing cats)
     this.spawnAnimals(this.timelineLayout);
+    console.log('[MessageTimeline] Spawned', this.animals.length, 'animals');
     
     // Still render buildings using existing system
-    // (but positioned by the new layout)
     this.updateFromSnapshot(snapshot);
   }
   

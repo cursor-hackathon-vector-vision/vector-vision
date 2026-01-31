@@ -18,7 +18,7 @@ function generateDemoSnapshots(): ProjectSnapshot[] {
   const snapshots: ProjectSnapshot[] = [];
   const baseTime = Date.now() - 7200000; // 2 hours ago
   
-  // Snapshot 1: Initial setup
+  // Snapshot 1: Initial setup - with MANY chats for better visualization
   snapshots.push({
     timestamp: new Date(baseTime),
     commitHash: 'abc1234',
@@ -33,12 +33,16 @@ function generateDemoSnapshots(): ProjectSnapshot[] {
     ],
     chats: [
       createChat('user', 'Create a new Vite + TypeScript project for 3D visualization', baseTime, ['/package.json', '/tsconfig.json']),
-      createChat('assistant', 'I\'ll set up a new Vite project with TypeScript support. This includes configuring the build tools and creating the entry point...', baseTime + 30000, ['/vite.config.ts', '/src/main.ts']),
+      createChat('assistant', 'I\'ll set up a new Vite project with TypeScript support. This includes configuring the build tools, TypeScript compiler options, and creating the entry point. Let me create the necessary configuration files...', baseTime + 30000, ['/vite.config.ts', '/src/main.ts']),
+      createChat('user', 'What dependencies do we need?', baseTime + 60000, ['/package.json']),
+      createChat('assistant', 'For a 3D visualization project, we\'ll need three.js as the core 3D library, along with @types/three for TypeScript support. I\'ll also add post-processing effects and some utilities for better rendering quality.', baseTime + 90000, ['/package.json']),
+      createChat('user', 'Add the dependencies', baseTime + 120000, ['/package.json']),
+      createChat('assistant', 'Done! I\'ve added three.js, postprocessing, and the TypeScript type definitions. Run npm install to get everything set up.', baseTime + 150000, ['/package.json']),
     ],
     terminalCommands: []
   });
   
-  // Snapshot 2: Add Three.js
+  // Snapshot 2: Add Three.js - with detailed conversation
   snapshots.push({
     timestamp: new Date(baseTime + 600000),
     commitHash: 'def5678',
@@ -51,7 +55,11 @@ function generateDemoSnapshots(): ProjectSnapshot[] {
     ],
     chats: [
       createChat('user', 'Add Three.js and create a basic 3D scene with orbit controls', baseTime + 600000, ['/src/3d/scene.ts']),
-      createChat('assistant', 'I\'ll create a SceneManager class that handles the Three.js setup including camera, renderer, lighting, and orbit controls...', baseTime + 630000, ['/src/3d/scene.ts', '/src/types/index.ts']),
+      createChat('assistant', 'I\'ll create a SceneManager class that handles the Three.js setup. This will include: a PerspectiveCamera with proper field of view, a WebGL renderer with antialiasing, ambient and directional lighting for good visibility, and OrbitControls for interactive navigation.', baseTime + 630000, ['/src/3d/scene.ts', '/src/types/index.ts']),
+      createChat('user', 'What camera settings should we use?', baseTime + 660000, ['/src/3d/scene.ts']),
+      createChat('assistant', 'For a city visualization, I recommend a perspective camera with a 60° FOV, positioned above and at an angle to see the overall structure. We can also add a subtle fog effect to give depth to the scene. The camera will be attached to OrbitControls with damping enabled for smooth movement.', baseTime + 690000, ['/src/3d/scene.ts']),
+      createChat('user', 'Add some post-processing effects', baseTime + 720000, ['/src/3d/scene.ts']),
+      createChat('assistant', 'Adding bloom effect for glowing elements, SMAA antialiasing for smoother edges, and a subtle vignette to focus attention on the center. These effects use the EffectComposer from the postprocessing library.', baseTime + 750000, ['/src/3d/scene.ts']),
     ],
     terminalCommands: []
   });
