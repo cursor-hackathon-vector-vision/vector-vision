@@ -5,6 +5,7 @@ import { getGitHistory } from './gitParser';
 import { getCursorData } from './cursorParser';
 import { discoverCursorProjects, getProjectConversations, quickScanForCursor } from './cursorDiscovery';
 import { getUniversalHistory } from './universalHistoryParser';
+import { getTranscripts, transcriptsToChatMessages } from './transcriptParser';
 import path from 'path';
 import fs from 'fs';
 
@@ -53,8 +54,22 @@ app.post('/api/scan', async (req, res) => {
     // Get Universal History (new comprehensive parser)
     const universalHistory = await getUniversalHistory(resolvedPath);
     
+    // Get Agent Transcripts (the REAL conversations!)
+    const transcripts = await getTranscripts(resolvedPath);
+    const transcriptMessages = transcriptsToChatMessages(transcripts);
+    console.log(`[Transcripts] Found ${transcripts.length} transcripts with ${transcriptMessages.length} messages`);
+    
     // Build response
     const projectName = path.basename(resolvedPath);
+    
+    // Merge transcript messages with cursor data
+    const allChats = [
+      ...cursorData.chats,
+      ...transcriptMessages,
+    ];
+    
+    // Sort by timestamp and dedupe
+    allChats.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
     
     res.json({
       success: true,
@@ -63,9 +78,19 @@ app.post('/api/scan', async (req, res) => {
         path: resolvedPath,
         files,
         gitHistory,
-        cursorData,
+        cursorData: {
+          ...cursorData,
+          chats: allChats, // Include transcript messages!
+          conversationCount: cursorData.conversationCount + transcripts.length,
+        },
         // New: Universal history with all sources
-        history: universalHistory
+        history: universalHistory,
+        // Also expose transcripts separately for granular access
+        transcripts: {
+          count: transcripts.length,
+          totalMessages: transcriptMessages.length,
+          ids: transcripts.map(t => t.id),
+        }
       }
     });
     
