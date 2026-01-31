@@ -372,6 +372,9 @@ function createRoadSegment(
   const midX = (start.x + end.x) / 2;
   const midZ = (start.y + end.y) / 2;
   
+  // BASE Y - branch roads sit ABOVE main road to avoid z-fighting
+  const baseY = isMain ? 0.01 : 0.04;
+  
   // Road surface
   const roadGeom = new THREE.PlaneGeometry(length + 0.5, width);
   const roadMat = new THREE.MeshStandardMaterial({
@@ -381,7 +384,7 @@ function createRoadSegment(
   const roadMesh = new THREE.Mesh(roadGeom, roadMat);
   roadMesh.rotation.x = -Math.PI / 2;
   roadMesh.rotation.z = -angle;
-  roadMesh.position.set(midX, 0.02, midZ);
+  roadMesh.position.set(midX, baseY, midZ);
   group.add(roadMesh);
   
   // Dashed center line (main road only, or simpler for branches)
@@ -403,7 +406,7 @@ function createRoadSegment(
     const dash = new THREE.Mesh(dashGeom, dashMat);
     dash.rotation.x = -Math.PI / 2;
     dash.rotation.z = -angle;
-    dash.position.set(dashX, 0.03, dashZ);
+    dash.position.set(dashX, baseY + 0.01, dashZ);
     group.add(dash);
   }
   
@@ -421,7 +424,7 @@ function createRoadSegment(
     
     const perpX = Math.sin(angle) * (width / 2 - 0.2) * side;
     const perpZ = -Math.cos(angle) * (width / 2 - 0.2) * side;
-    edge.position.set(midX + perpX, 0.03, midZ + perpZ);
+    edge.position.set(midX + perpX, baseY + 0.01, midZ + perpZ);
     group.add(edge);
   }
   
@@ -441,7 +444,7 @@ function createRoadSegment(
     const offset = width / 2 + sidewalkWidth / 2;
     const perpX = Math.sin(angle) * offset * side;
     const perpZ = -Math.cos(angle) * offset * side;
-    walk.position.set(midX + perpX, 0.015, midZ + perpZ);
+    walk.position.set(midX + perpX, baseY - 0.005, midZ + perpZ);
     walk.userData = { isSidewalk: true };
     group.add(walk);
     
@@ -460,7 +463,7 @@ function createRoadSegment(
       const curbOffset = width / 2 + 0.1;
       const curbPerpX = Math.sin(angle) * curbOffset * side;
       const curbPerpZ = -Math.cos(angle) * curbOffset * side;
-      curb.position.set(midX + curbPerpX, 0.025, midZ + curbPerpZ);
+      curb.position.set(midX + curbPerpX, baseY + 0.015, midZ + curbPerpZ);
       group.add(curb);
     }
   }

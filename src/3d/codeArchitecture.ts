@@ -1034,10 +1034,11 @@ export class CodeArchitecture {
     this.decorationGroup.add(decorationsGroup);
     
     // Create position lookup from growing layout
+    // Buildings float slightly above ground (0.15) to avoid z-fighting with streets
     const positionMap = new Map<string, { pos: THREE.Vector3; rotation: number }>();
     for (const pos of this.growingLayout.buildings) {
       positionMap.set(pos.file.path, { 
-        pos: new THREE.Vector3(pos.x, 0, pos.z),
+        pos: new THREE.Vector3(pos.x, 0.15, pos.z),
         rotation: pos.rotation
       });
     }
