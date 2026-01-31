@@ -1101,10 +1101,8 @@ export class CodeArchitecture {
       this.streetGroup.add(roadMesh);
     }
     
-    // Create decorations (SIMPLIFIED for performance)
-    const decorationsGroup = createGrowingDecorations(
-      this.growingLayout.decorations.slice(0, 50) // Limit decorations
-    );
+    // Create ALL decorations - no limits!
+    const decorationsGroup = createGrowingDecorations(this.growingLayout.decorations);
     this.decorationGroup.add(decorationsGroup);
     
     // Create position lookup
@@ -1116,9 +1114,8 @@ export class CodeArchitecture {
       });
     }
     
-    // Create buildings (limit to first 100 for performance)
-    const filesToRender = snapshot.files.slice(0, 100);
-    for (const file of filesToRender) {
+    // Create ALL buildings - no limits!
+    for (const file of snapshot.files) {
       const fileWithContent: FileWithContent = { ...file };
       
       if (fileContents && fileContents[file.path]) {
@@ -2506,36 +2503,26 @@ export class CodeArchitecture {
   }
   
   /**
-   * Optimized rendering - uses simpler geometries and fewer objects
+   * Render ALL timeline elements - no limits!
    */
   private renderTimelineElementsOptimized(layout: MessageTimelineLayout): void {
-    // Limit the number of rendered elements for performance
-    const maxElements = 200;
-    let count = 0;
-    
     for (const element of layout.timeline) {
-      if (count >= maxElements) break;
-      
       if (element.type === 'message') {
         const messageData = element.data as MessageData;
-        // Use simplified marker for performance
         const marker = this.createSimpleMessageMarker(messageData);
         marker.position.copy(element.position);
         marker.visible = false; // Hidden initially
         
         this.timelineGroup.add(marker);
         this.messageMarkers.set(messageData.id, marker);
-        count++;
       } else if (element.type === 'tree') {
         const treeData = element.data as import('./messageTimeline').TreeData;
-        // Use simplified tree for performance
         const tree = this.createSimpleTokenTree(treeData);
         tree.position.copy(element.position);
         tree.visible = false; // Hidden initially
         
         this.timelineGroup.add(tree);
         this.tokenTrees.set(`tree-${treeData.messageId}`, tree);
-        count++;
       }
     }
   }
@@ -2613,34 +2600,19 @@ export class CodeArchitecture {
   }
   
   /**
-   * Render districts with their streets and decorations (OPTIMIZED!)
+   * Render districts with their streets and decorations
    */
   private renderDistricts(layout: MessageTimelineLayout): void {
-    // PERFORMANCE: Limit districts to prevent lag
-    const maxDistricts = 5;
-    const maxStreetsPerDistrict = 3;
-    const maxDecorationsPerDistrict = 10;
-    
-    let districtCount = 0;
+    // Render ALL districts - no limits!
     for (const district of layout.districts) {
-      if (districtCount >= maxDistricts) break;
-      districtCount++;
-      
-      // Render limited district streets
-      let streetCount = 0;
+      // Render ALL district streets
       for (const street of district.streets) {
-        if (streetCount >= maxStreetsPerDistrict) break;
-        streetCount++;
-        
         const road = this.createDistrictRoad(street);
         this.streetGroup.add(road);
       }
       
-      // Render limited decorations
-      let decoCount = 0;
+      // Render ALL decorations
       for (const deco of district.decorations) {
-        if (decoCount >= maxDecorationsPerDistrict) break;
-        decoCount++;
         
         let mesh: THREE.Group;
         
