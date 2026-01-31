@@ -4,10 +4,9 @@ import {
   updateConnectionArcs
 } from './advancedLayout';
 import {
-  createStreetNetwork,
-  addStreetNetworkToScene,
-  type StreetNetwork
-} from './streetSystem';
+  createCleanStreet,
+  type CleanStreet
+} from './cleanStreet';
 import {
   SimpleLayoutEngine,
   createDirectoryLabel,
@@ -113,7 +112,7 @@ export class CodeArchitecture {
   // Simple layout system
   private simpleLayoutEngine: SimpleLayoutEngine;
   private connectionArcs: THREE.Group[] = [];
-  private streetNetwork: StreetNetwork | null = null;
+  private cleanStreet: CleanStreet | null = null;
   private chatTrees: THREE.Group[] = [];
   private directoryLabels: THREE.Sprite[] = [];
   private streetGroup: THREE.Group;
@@ -1080,10 +1079,10 @@ export class CodeArchitecture {
     // Calculate simple layout
     const layout = this.simpleLayoutEngine.calculateLayout(simpleFileData, simpleChatData);
     
-    // Clear and recreate street network (just main road)
-    this.clearStreetNetwork();
-    this.streetNetwork = createStreetNetwork([], 300, 300);
-    addStreetNetworkToScene(this.streetNetwork, this.streetGroup, this.effectsGroup);
+    // Clear and recreate clean street (just main road)
+    this.clearCleanStreet();
+    this.cleanStreet = createCleanStreet(300);
+    this.streetGroup.add(this.cleanStreet.group);
     
     // Clear and create chat trees
     this.clearChatTrees();
@@ -1807,13 +1806,12 @@ export class CodeArchitecture {
     this.connectionArcs = [];
   }
   
-  private clearStreetNetwork(): void {
-    if (!this.streetNetwork) return;
+  private clearCleanStreet(): void {
+    if (!this.cleanStreet) return;
     
-    // Remove main highway
-    this.streetGroup.remove(this.streetNetwork.mainHighway);
-    this.streetNetwork.mainHighway.traverse((child) => {
-      if (child instanceof THREE.Mesh) {
+    this.streetGroup.remove(this.cleanStreet.group);
+    this.cleanStreet.group.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.Points) {
         child.geometry.dispose();
         if (child.material instanceof THREE.Material) {
           child.material.dispose();
@@ -1821,29 +1819,7 @@ export class CodeArchitecture {
       }
     });
     
-    // Remove access roads
-    for (const road of this.streetNetwork.accessRoads) {
-      this.streetGroup.remove(road);
-      road.traverse((child) => {
-        if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
-          child.geometry.dispose();
-          if (child.material instanceof THREE.Material) {
-            child.material.dispose();
-          }
-        }
-      });
-    }
-    
-    // Remove intersections
-    for (const intersection of this.streetNetwork.intersections) {
-      this.streetGroup.remove(intersection);
-    }
-    
-    // Remove particles
-    this.effectsGroup.remove(this.streetNetwork.dataParticles);
-    this.streetNetwork.dataParticles.geometry.dispose();
-    
-    this.streetNetwork = null;
+    this.cleanStreet = null;
   }
   
   private clearChatTrees(): void {
@@ -2372,8 +2348,8 @@ export class CodeArchitecture {
     updateConnectionArcs(this.connectionArcs, this.time);
     
     // Update street network animations
-    if (this.streetNetwork) {
-      this.streetNetwork.update(this.time);
+    if (this.cleanStreet) {
+      this.cleanStreet.update(this.time);
     }
   }
   
