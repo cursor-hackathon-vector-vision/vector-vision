@@ -1,5 +1,12 @@
 import * as THREE from 'three';
 import type { ProjectSnapshot, FileNode, ChatMessage } from '../types';
+import { 
+  AdvancedLayoutEngine, 
+  createDistrictMesh, 
+  createStreetMesh,
+  createConnectionArc,
+  updateConnectionArcs
+} from './advancedLayout';
 
 /**
  * LIVING CODE ARCHITECTURE
@@ -97,12 +104,23 @@ export class CodeArchitecture {
   // Ground plane
   private ground: THREE.Mesh | null = null;
   
+  // Advanced layout system
+  private layoutEngine: AdvancedLayoutEngine;
+  private districts: THREE.Group[] = [];
+  private connectionArcs: THREE.Group[] = [];
+  private districtGroup: THREE.Group;
+  
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+    
+    // Initialize advanced layout engine
+    this.layoutEngine = new AdvancedLayoutEngine(250, 250, 3);
     
     // Create groups
     this.groundGroup = new THREE.Group();
     this.groundGroup.name = 'ground';
+    this.districtGroup = new THREE.Group();
+    this.districtGroup.name = 'districts';
     this.buildingGroup = new THREE.Group();
     this.buildingGroup.name = 'buildings';
     this.connectionGroup = new THREE.Group();
@@ -111,6 +129,7 @@ export class CodeArchitecture {
     this.effectsGroup.name = 'effects';
     
     scene.add(this.groundGroup);
+    scene.add(this.districtGroup);
     scene.add(this.connectionGroup);
     scene.add(this.buildingGroup);
     scene.add(this.effectsGroup);
@@ -1030,8 +1049,37 @@ export class CodeArchitecture {
       }
     }
     
-    // Calculate layout
-    const layout = this.calculateLayout(snapshot.files);
+    // Use advanced layout engine
+    const fileData = snapshot.files.map(f => ({
+      path: f.path,
+      name: f.name,
+      directory: f.directory || '/',
+      extension: f.extension,
+      linesOfCode: f.linesOfCode,
+      imports: fileContents?.[f.path]?.imports || [],
+    }));
+    
+    const advancedLayout = this.layoutEngine.calculateLayout(fileData);
+    
+    // Clear and recreate districts
+    this.clearDistricts();
+    for (const district of advancedLayout.districts) {
+      const districtMesh = createDistrictMesh(district);
+      this.districtGroup.add(districtMesh);
+      this.districts.push(districtMesh);
+    }
+    
+    // Create streets
+    for (const street of advancedLayout.streets) {
+      const streetMesh = createStreetMesh(street);
+      this.groundGroup.add(streetMesh);
+    }
+    
+    // Create position lookup
+    const positionMap = new Map<string, THREE.Vector3>();
+    for (const pos of advancedLayout.buildings) {
+      positionMap.set(pos.path, new THREE.Vector3(pos.x, 0, pos.z));
+    }
     
     // Create or update buildings
     for (const file of snapshot.files) {
@@ -1044,7 +1092,7 @@ export class CodeArchitecture {
         fileWithContent.imports = fileContents[file.path].imports;
       }
       
-      const position = layout.get(file.path) || new THREE.Vector3();
+      const position = positionMap.get(file.path) || new THREE.Vector3();
       
       if (this.buildings.has(file.path)) {
         this.updateBuilding(fileWithContent, position);
@@ -1053,14 +1101,26 @@ export class CodeArchitecture {
       }
     }
     
-    // Update connections based on imports
+    // Create connection arcs
+    this.clearConnectionArcs();
+    for (const arc of advancedLayout.connections) {
+      const arcGroup = createConnectionArc(arc);
+      this.connectionGroup.add(arcGroup);
+      this.connectionArcs.push(arcGroup);
+    }
+    
+    // Update connections based on imports (legacy)
     this.updateConnections(fileContents);
     
     // Create chat visualizations
     this.visualizeChats(snapshot.chats);
   }
   
-  private calculateLayout(files: FileNode[]): Map<string, THREE.Vector3> {
+  /**
+   * @deprecated - Now using AdvancedLayoutEngine. Kept for reference.
+   */
+  // @ts-ignore - Unused but kept for fallback/reference
+  private _legacyCalculateLayout(files: FileNode[]): Map<string, THREE.Vector3> {
     const layout = new Map<string, THREE.Vector3>();
     
     // HYBRID LAYOUT: Combines terraced hierarchy (B) with ring organization (A)
@@ -1711,6 +1771,36 @@ export class CodeArchitecture {
     }
   }
   
+  private clearDistricts(): void {
+    for (const district of this.districts) {
+      this.districtGroup.remove(district);
+      district.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          if (child.material instanceof THREE.Material) {
+            child.material.dispose();
+          }
+        }
+      });
+    }
+    this.districts = [];
+  }
+  
+  private clearConnectionArcs(): void {
+    for (const arc of this.connectionArcs) {
+      this.connectionGroup.remove(arc);
+      arc.traverse((child) => {
+        if (child instanceof THREE.Mesh || child instanceof THREE.Line || child instanceof THREE.Points) {
+          child.geometry.dispose();
+          if (child.material instanceof THREE.Material) {
+            child.material.dispose();
+          }
+        }
+      });
+    }
+    this.connectionArcs = [];
+  }
+  
   private removeBuilding(building: CodeBuilding): void {
     this.buildingGroup.remove(building.group);
     
@@ -2067,6 +2157,9 @@ export class CodeArchitecture {
     
     // Update street light flickering
     this.updateStreetLightFlicker();
+    
+    // Update connection arc animations
+    updateConnectionArcs(this.connectionArcs, this.time);
   }
   
   private updateStreetLightFlicker(): void {
