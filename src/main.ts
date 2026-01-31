@@ -392,18 +392,30 @@ class VectorVisionApp {
   }
 
   private updateTimeline(projectData: ProjectData): void {
-    this.timelineSlider.max = (projectData.snapshots.length - 1).toString();
-    this.timelineSlider.value = (projectData.snapshots.length - 1).toString();
+    const maxIndex = projectData.snapshots.length - 1;
+    console.log('[Timeline] Updating, max index:', maxIndex);
+    
+    this.timelineSlider.min = '0';
+    this.timelineSlider.max = maxIndex.toString();
+    this.timelineSlider.value = '0'; // Start at beginning!
+    
+    // Force update the slider's visual
+    this.timelineSlider.style.setProperty('--value', '0');
     
     // Update markers
     const markersContainer = document.getElementById('timeline-markers')!;
     markersContainer.innerHTML = '';
     
+    // Only show markers for first 100 snapshots (performance)
+    const step = Math.ceil(projectData.snapshots.length / 100);
+    
     projectData.snapshots.forEach((snapshot, index) => {
+      if (index % step !== 0 && index !== maxIndex) return;
+      
       const marker = document.createElement('div');
       marker.className = 'commit-marker';
-      const percentage = projectData.snapshots.length > 1 
-        ? (index / (projectData.snapshots.length - 1)) * 100 
+      const percentage = maxIndex > 0 
+        ? (index / maxIndex) * 100 
         : 50;
       marker.style.left = `${percentage}%`;
       
@@ -411,53 +423,115 @@ class VectorVisionApp {
       const changedFiles = snapshot.files.filter(f => f.status !== 'unchanged').length;
       marker.style.height = `${Math.min(20, 5 + changedFiles * 2)}px`;
       
+      // Color based on role (if message-based)
+      if (snapshot.author === 'User') {
+        marker.style.background = '#667eea';
+      } else if (snapshot.author === 'Assistant') {
+        marker.style.background = '#48bb78';
+      }
+      
       markersContainer.appendChild(marker);
     });
+    
+    console.log('[Timeline] Updated with', projectData.snapshots.length, 'snapshots');
   }
 
   private setupTimeline(): void {
-    // Slider change
-    this.timelineSlider.addEventListener('input', () => {
-      const index = parseInt(this.timelineSlider.value);
+    console.log('[Timeline] Setting up event listeners...');
+    
+    // Slider change - fires continuously while dragging
+    this.timelineSlider.addEventListener('input', (e) => {
+      const target = e.target as HTMLInputElement;
+      const index = parseInt(target.value);
+      console.log('[Timeline] Slider input:', index);
+      
+      // Stop playback when manually changing
+      if (getState().isPlaying) {
+        this.togglePlayback();
+      }
+      
+      store.getState().setCurrentSnapshot(index);
+    });
+    
+    // Also listen to 'change' for when slider is released
+    this.timelineSlider.addEventListener('change', (e) => {
+      const target = e.target as HTMLInputElement;
+      const index = parseInt(target.value);
+      console.log('[Timeline] Slider change (released):', index);
       store.getState().setCurrentSnapshot(index);
     });
     
     // Play/Pause button
-    document.getElementById('btn-play')!.addEventListener('click', () => {
-      this.togglePlayback();
-    });
+    const playBtn = document.getElementById('btn-play');
+    if (playBtn) {
+      playBtn.addEventListener('click', () => {
+        console.log('[Timeline] Play button clicked');
+        this.togglePlayback();
+      });
+    }
     
     // Previous button
-    document.getElementById('btn-prev')!.addEventListener('click', () => {
-      store.getState().prevSnapshot();
-    });
+    const prevBtn = document.getElementById('btn-prev');
+    if (prevBtn) {
+      prevBtn.addEventListener('click', () => {
+        console.log('[Timeline] Prev button clicked');
+        store.getState().prevSnapshot();
+      });
+    }
     
     // Next button
-    document.getElementById('btn-next')!.addEventListener('click', () => {
-      store.getState().nextSnapshot();
-    });
+    const nextBtn = document.getElementById('btn-next');
+    if (nextBtn) {
+      nextBtn.addEventListener('click', () => {
+        console.log('[Timeline] Next button clicked');
+        store.getState().nextSnapshot();
+      });
+    }
+    
+    console.log('[Timeline] Setup complete');
   }
 
   private togglePlayback(): void {
     const state = getState();
     
+    console.log('[Playback] Toggle called, isPlaying:', state.isPlaying, 'projectData:', !!state.projectData);
+    
+    if (!state.projectData) {
+      console.warn('[Playback] No project data loaded!');
+      this.showToast('Load a project first!');
+      return;
+    }
+    
     if (state.isPlaying) {
       // Stop playback
+      console.log('[Playback] Stopping...');
       if (this.playbackInterval) {
         clearInterval(this.playbackInterval);
         this.playbackInterval = null;
       }
       store.getState().setIsPlaying(false);
       document.getElementById('btn-play')!.innerHTML = '&#9654;';
+      
+      // Hide message popup when stopping
+      this.messagePopup.classList.remove('visible');
     } else {
       // Start playback
+      console.log('[Playback] Starting... Snapshots:', state.projectData.snapshots.length);
       store.getState().setIsPlaying(true);
       document.getElementById('btn-play')!.innerHTML = '&#10074;&#10074;';
       
       // Reset to beginning if at end
-      if (state.projectData && state.currentSnapshotIndex >= state.projectData.snapshots.length - 1) {
+      if (state.currentSnapshotIndex >= state.projectData.snapshots.length - 1) {
+        console.log('[Playback] At end, resetting to 0');
         store.getState().setCurrentSnapshot(0);
+        this.onSnapshotChange(0);
       }
+      
+      // Use faster speed for many snapshots
+      const speed = state.projectData.snapshots.length > 50 ? 800 : 
+                    state.projectData.snapshots.length > 20 ? 1200 : 1500;
+      
+      console.log('[Playback] Speed:', speed, 'ms per step');
       
       this.playbackInterval = window.setInterval(() => {
         const currentState = getState();
@@ -467,11 +541,12 @@ class VectorVisionApp {
         
         if (nextIndex >= currentState.projectData.snapshots.length) {
           // Reached end, stop playback
+          console.log('[Playback] Reached end');
           this.togglePlayback();
         } else {
           store.getState().setCurrentSnapshot(nextIndex);
         }
-      }, state.playbackSpeed);
+      }, speed);
     }
   }
 

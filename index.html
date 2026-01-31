@@ -245,6 +245,8 @@
       border-radius: 3px;
       cursor: pointer;
       margin-top: 17px;
+      position: relative;
+      z-index: 10; /* Above markers */
     }
 
     #timeline-slider::-webkit-slider-thumb {
@@ -275,6 +277,7 @@
       height: 30px;
       display: flex;
       align-items: flex-end;
+      pointer-events: none; /* Allow clicks to pass through to slider */
     }
 
     .commit-marker {
