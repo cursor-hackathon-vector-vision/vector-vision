@@ -71,7 +71,7 @@ export interface Block {
 export interface DistrictStreet {
   points: THREE.Vector3[];
   width: number;
-  type: 'main' | 'secondary' | 'alley';
+  type: 'main' | 'secondary' | 'tertiary' | 'alley';
 }
 
 export interface Decoration {
@@ -290,7 +290,12 @@ export class MessageTimelineEngine {
   }
   
   /**
-   * Create street network within district
+   * Create street network within district - GRID BASED, STRAIGHT ROADS ONLY
+   * 
+   * Road dimensions (based on 3DStreet standards):
+   * - Main road: 4 lanes (12m) + 2×2m sidewalks = 16m total
+   * - Side road: 2 lanes (6m) + 2×2m sidewalks = 10m total  
+   * - Sub road: 1 lane (3m) + 2×2m sidewalks = 7m total
    */
   private createDistrictStreets(
     center: THREE.Vector3,
@@ -299,34 +304,77 @@ export class MessageTimelineEngine {
   ): DistrictStreet[] {
     const streets: DistrictStreet[] = [];
     
-    // Main district road (circular)
-    const circlePoints: THREE.Vector3[] = [];
-    const segments = 24;
-    for (let i = 0; i <= segments; i++) {
-      const angle = (i / segments) * Math.PI * 2;
-      const x = center.x + Math.cos(angle) * radius * 0.8;
-      const z = center.z + Math.sin(angle) * radius * 0.8;
-      circlePoints.push(new THREE.Vector3(x, 0, z));
-    }
+    // STREET WIDTHS (road + sidewalks on both sides)
+    const MAIN_ROAD_WIDTH = 16;    // 4 lanes (12m) + 2×2m sidewalks
+    const SIDE_ROAD_WIDTH = 10;    // 2 lanes (6m) + 2×2m sidewalks
+    const SUB_ROAD_WIDTH = 7;      // 1 lane (3m) + 2×2m sidewalks
     
+    // Main straight road through district center (horizontal)
+    const mainRoadStart = new THREE.Vector3(center.x - radius, 0, center.z);
+    const mainRoadEnd = new THREE.Vector3(center.x + radius, 0, center.z);
     streets.push({
-      points: circlePoints,
-      width: 6,
+      points: [mainRoadStart, mainRoadEnd],
+      width: MAIN_ROAD_WIDTH,
       type: 'main',
     });
     
-    // Radial streets to blocks
-    blocks.forEach((block) => {
-      const radialPoints = [
-        center.clone(),
-        block.position.clone(),
-      ];
+    // Cross road (vertical through center)
+    const crossRoadStart = new THREE.Vector3(center.x, 0, center.z - radius);
+    const crossRoadEnd = new THREE.Vector3(center.x, 0, center.z + radius);
+    streets.push({
+      points: [crossRoadStart, crossRoadEnd],
+      width: MAIN_ROAD_WIDTH,
+      type: 'main',
+    });
+    
+    // Side roads to blocks (straight lines from main road to block)
+    const blocksPerQuadrant = Math.ceil(blocks.length / 4);
+    
+    blocks.forEach((block, index) => {
+      // Determine which quadrant the block is in
+      const dx = block.position.x - center.x;
+      const dz = block.position.z - center.z;
       
-      streets.push({
-        points: radialPoints,
-        width: 4,
-        type: 'secondary',
-      });
+      // Create a side road perpendicular to main roads
+      if (Math.abs(dx) > Math.abs(dz)) {
+        // Block is more horizontal - connect vertically from main road
+        const sideRoadStart = new THREE.Vector3(block.position.x, 0, center.z);
+        const sideRoadEnd = block.position.clone();
+        sideRoadEnd.y = 0;
+        streets.push({
+          points: [sideRoadStart, sideRoadEnd],
+          width: SIDE_ROAD_WIDTH,
+          type: 'secondary',
+        });
+      } else {
+        // Block is more vertical - connect horizontally from cross road
+        const sideRoadStart = new THREE.Vector3(center.x, 0, block.position.z);
+        const sideRoadEnd = block.position.clone();
+        sideRoadEnd.y = 0;
+        streets.push({
+          points: [sideRoadStart, sideRoadEnd],
+          width: SIDE_ROAD_WIDTH,
+          type: 'secondary',
+        });
+      }
+      
+      // Add sub-roads between nearby blocks (every other block)
+      if (index > 0 && index % 2 === 0) {
+        const prevBlock = blocks[index - 1];
+        const subRoadStart = prevBlock.position.clone();
+        const subRoadEnd = block.position.clone();
+        subRoadStart.y = 0;
+        subRoadEnd.y = 0;
+        
+        // Only add if blocks are reasonably close
+        if (subRoadStart.distanceTo(subRoadEnd) < radius) {
+          streets.push({
+            points: [subRoadStart, subRoadEnd],
+            width: SUB_ROAD_WIDTH,
+            type: 'tertiary',
+          });
+        }
+      }
     });
     
     return streets;

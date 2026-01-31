@@ -135,47 +135,65 @@ export function createTokenTree(treeData: TreeData): THREE.Group {
 }
 
 /**
- * Create a park/plaza
+ * Create a park/plaza with RECTANGULAR grass (no circles!)
  */
 export function createPark(scale: number = 3): THREE.Group {
   const park = new THREE.Group();
   
-  // Grass base
-  const grassGeom = new THREE.CircleGeometry(scale * 3, 32);
+  // RECTANGULAR grass base (not circular!)
+  const parkWidth = scale * 6;
+  const parkDepth = scale * 4;
+  const grassGeom = new THREE.PlaneGeometry(parkWidth, parkDepth);
   const grassMat = new THREE.MeshStandardMaterial({
-    color: 0x7ec850,
+    color: 0x7ec850,  // Nice grass green
     roughness: 0.9,
   });
   
   const grass = new THREE.Mesh(grassGeom, grassMat);
   grass.rotation.x = -Math.PI / 2;
-  grass.position.z = 0.02;
+  grass.position.y = 0.02;  // Fixed: was position.z
   park.add(grass);
   
-  // Flower patches
-  const flowerColors = [0xff69b4, 0xffdd00, 0xff6b6b, 0x4ecdc4];
-  for (let i = 0; i < 8; i++) {
-    const angle = (i / 8) * Math.PI * 2;
-    const distance = scale * (1 + Math.random() * 1.5);
+  // Flower beds along edges
+  const flowerColors = [0xff69b4, 0xffdd00, 0xff6b6b, 0x4ecdc4, 0x9b59b6];
+  const flowerBedWidth = 0.8;
+  
+  // Create flower beds along the park edges
+  for (let i = 0; i < 12; i++) {
+    // Position flowers along edges
+    let fx: number, fz: number;
+    if (i < 3) {
+      // Top edge
+      fx = -parkWidth/2 + (i + 1) * parkWidth/4;
+      fz = -parkDepth/2 + flowerBedWidth;
+    } else if (i < 6) {
+      // Bottom edge
+      fx = -parkWidth/2 + (i - 2) * parkWidth/4;
+      fz = parkDepth/2 - flowerBedWidth;
+    } else if (i < 9) {
+      // Left edge
+      fx = -parkWidth/2 + flowerBedWidth;
+      fz = -parkDepth/2 + (i - 5) * parkDepth/4;
+    } else {
+      // Right edge
+      fx = parkWidth/2 - flowerBedWidth;
+      fz = -parkDepth/2 + (i - 8) * parkDepth/4;
+    }
     
-    const flowerGeom = new THREE.SphereGeometry(0.3, 8, 8);
+    const flowerGeom = new THREE.SphereGeometry(0.25, 6, 6);
     const flowerMat = new THREE.MeshStandardMaterial({
       color: flowerColors[i % flowerColors.length],
       emissive: flowerColors[i % flowerColors.length],
-      emissiveIntensity: 0.3,
+      emissiveIntensity: 0.2,
     });
     
     const flower = new THREE.Mesh(flowerGeom, flowerMat);
-    flower.position.set(
-      Math.cos(angle) * distance,
-      0,
-      Math.sin(angle) * distance + 0.3
-    );
-    flower.scale.set(1, 1, 0.5);
+    flower.position.set(fx, 0.15, fz);
+    flower.scale.set(1, 0.6, 1);
     park.add(flower);
   }
   
-  // Central feature (small fountain or statue)
+  // Central fountain/statue
   const featureGeom = new THREE.CylinderGeometry(0.5, 0.8, 2, 8);
   const featureMat = new THREE.MeshStandardMaterial({
     color: 0x95a5a6,
@@ -184,8 +202,16 @@ export function createPark(scale: number = 3): THREE.Group {
   });
   
   const feature = new THREE.Mesh(featureGeom, featureMat);
-  feature.position.z = 1;
+  feature.position.y = 1;  // Fixed: was position.z
   park.add(feature);
+  
+  // Benches
+  for (let side = -1; side <= 1; side += 2) {
+    const bench = createBench(0.6);
+    bench.position.set(side * (parkWidth / 3), 0, 0);
+    bench.rotation.y = side > 0 ? -Math.PI / 2 : Math.PI / 2;
+    park.add(bench);
+  }
   
   park.userData.isPark = true;
   return park;

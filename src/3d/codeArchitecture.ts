@@ -2644,25 +2644,62 @@ export class CodeArchitecture {
   }
   
   /**
-   * Create a simple district road
+   * Create a proper district road with lanes and sidewalks
+   * 
+   * Based on 3DStreet standards:
+   * - Main road (type: 'main'): 4 lanes (12m) + 2×2m sidewalks = 16m total
+   * - Side road (type: 'secondary'): 2 lanes (6m) + 2×2m sidewalks = 10m total
+   * - Sub road (type: 'tertiary'): 1 lane (3m) + 2×2m sidewalks = 7m total
    */
   private createDistrictRoad(street: any): THREE.Group {
     const group = new THREE.Group();
+    
+    // Road dimensions based on type
+    const LANE_WIDTH = 3;        // 3m per lane
+    const SIDEWALK_WIDTH = 2;    // 2m sidewalk on each side
+    
+    let numLanes: number;
+    let roadColor: number;
+    
+    switch (street.type) {
+      case 'main':
+        numLanes = 4;  // 2 double lanes
+        roadColor = 0x353540;
+        break;
+      case 'secondary':
+        numLanes = 2;  // 2 single lanes
+        roadColor = 0x404048;
+        break;
+      case 'tertiary':
+      default:
+        numLanes = 1;  // 1 lane
+        roadColor = 0x454550;
+        break;
+    }
+    
+    const roadWidth = numLanes * LANE_WIDTH;
+    const totalWidth = roadWidth + (SIDEWALK_WIDTH * 2);
     
     for (let i = 0; i < street.points.length - 1; i++) {
       const p1 = street.points[i];
       const p2 = street.points[i + 1];
       
       const length = p1.distanceTo(p2);
+      if (length < 0.5) continue; // Skip very short segments
+      
       const angle = Math.atan2(p2.z - p1.z, p2.x - p1.x);
       const midX = (p1.x + p2.x) / 2;
       const midZ = (p1.z + p2.z) / 2;
       
-      // Road surface
-      const roadGeom = new THREE.PlaneGeometry(length, street.width);
+      // Calculate perpendicular offset for sidewalks
+      const perpX = Math.sin(angle);
+      const perpZ = -Math.cos(angle);
+      
+      // === ASPHALT ROAD SURFACE ===
+      const roadGeom = new THREE.PlaneGeometry(length, roadWidth);
       const roadMat = new THREE.MeshStandardMaterial({
-        color: street.type === 'main' ? 0x404050 : 0x353540,
-        roughness: 0.8,
+        color: roadColor,
+        roughness: 0.85,
       });
       
       const road = new THREE.Mesh(roadGeom, roadMat);
@@ -2671,21 +2708,107 @@ export class CodeArchitecture {
       road.position.set(midX, 0.01, midZ);
       group.add(road);
       
-      // Center line
-      if (street.type === 'main') {
-        const lineGeom = new THREE.PlaneGeometry(length, 0.2);
-        const lineMat = new THREE.MeshBasicMaterial({
-          color: 0xffdd00,
-          transparent: true,
-          opacity: 0.6,
-        });
-        
-        const line = new THREE.Mesh(lineGeom, lineMat);
-        line.rotation.x = -Math.PI / 2;
-        line.rotation.z = -angle + Math.PI / 2;
-        line.position.set(midX, 0.02, midZ);
-        group.add(line);
+      // === SIDEWALKS (cat walking areas) ===
+      const sidewalkGeom = new THREE.PlaneGeometry(length, SIDEWALK_WIDTH);
+      const sidewalkMat = new THREE.MeshStandardMaterial({
+        color: 0x888888,  // Concrete gray
+        roughness: 0.7,
+      });
+      
+      // Left sidewalk
+      const leftSidewalk = new THREE.Mesh(sidewalkGeom, sidewalkMat);
+      leftSidewalk.rotation.x = -Math.PI / 2;
+      leftSidewalk.rotation.z = -angle + Math.PI / 2;
+      const leftOffset = (roadWidth / 2) + (SIDEWALK_WIDTH / 2);
+      leftSidewalk.position.set(
+        midX + perpX * leftOffset,
+        0.02,  // Slightly raised
+        midZ + perpZ * leftOffset
+      );
+      group.add(leftSidewalk);
+      
+      // Right sidewalk
+      const rightSidewalk = new THREE.Mesh(sidewalkGeom, sidewalkMat);
+      rightSidewalk.rotation.x = -Math.PI / 2;
+      rightSidewalk.rotation.z = -angle + Math.PI / 2;
+      const rightOffset = -((roadWidth / 2) + (SIDEWALK_WIDTH / 2));
+      rightSidewalk.position.set(
+        midX + perpX * rightOffset,
+        0.02,
+        midZ + perpZ * rightOffset
+      );
+      group.add(rightSidewalk);
+      
+      // === LANE MARKINGS ===
+      const lineWidth = 0.15;
+      const lineMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.7,
+      });
+      const centerLineMat = new THREE.MeshBasicMaterial({
+        color: 0xffdd00,  // Yellow center line
+        transparent: true,
+        opacity: 0.8,
+      });
+      
+      // Center divider line (yellow, for main and secondary roads)
+      if (numLanes >= 2) {
+        const centerGeom = new THREE.PlaneGeometry(length, lineWidth * 2);
+        const centerLine = new THREE.Mesh(centerGeom, centerLineMat);
+        centerLine.rotation.x = -Math.PI / 2;
+        centerLine.rotation.z = -angle + Math.PI / 2;
+        centerLine.position.set(midX, 0.015, midZ);
+        group.add(centerLine);
       }
+      
+      // Lane divider lines (white, dashed effect via multiple segments)
+      if (numLanes === 4) {
+        // Additional lane dividers for 4-lane road
+        const laneLineGeom = new THREE.PlaneGeometry(length, lineWidth);
+        
+        // Inner lane dividers (between lanes 1-2 and 3-4)
+        for (const side of [-1, 1]) {
+          const laneOffset = side * (LANE_WIDTH * 0.5 + LANE_WIDTH);
+          const laneLine = new THREE.Mesh(laneLineGeom, lineMat);
+          laneLine.rotation.x = -Math.PI / 2;
+          laneLine.rotation.z = -angle + Math.PI / 2;
+          laneLine.position.set(
+            midX + perpX * laneOffset,
+            0.015,
+            midZ + perpZ * laneOffset
+          );
+          group.add(laneLine);
+        }
+      }
+      
+      // === CURB EDGES ===
+      const curbGeom = new THREE.PlaneGeometry(length, 0.1);
+      const curbMat = new THREE.MeshBasicMaterial({
+        color: 0x666666,
+      });
+      
+      // Left curb
+      const leftCurb = new THREE.Mesh(curbGeom, curbMat);
+      leftCurb.rotation.x = -Math.PI / 2;
+      leftCurb.rotation.z = -angle + Math.PI / 2;
+      leftCurb.position.set(
+        midX + perpX * (roadWidth / 2),
+        0.025,
+        midZ + perpZ * (roadWidth / 2)
+      );
+      group.add(leftCurb);
+      
+      // Right curb
+      const rightCurb = new THREE.Mesh(curbGeom, curbMat);
+      rightCurb.rotation.x = -Math.PI / 2;
+      rightCurb.rotation.z = -angle + Math.PI / 2;
+      rightCurb.position.set(
+        midX + perpX * (-roadWidth / 2),
+        0.025,
+        midZ + perpZ * (-roadWidth / 2)
+      );
+      group.add(rightCurb);
     }
     
     return group;
