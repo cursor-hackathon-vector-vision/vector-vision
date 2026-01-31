@@ -160,6 +160,13 @@ export class GrowingCityEngine {
     const endT = 0.90;
     const usableLength = endT - startT;
     
+    // Sidewalk widths (must match createRoadSegment!)
+    // Main road: 2.5, Branch: 1.5
+    const sidewalkWidth = road.type === 'main' ? 2.5 : 1.5;
+    
+    // TOTAL road width including sidewalks on both sides
+    const totalRoadWidth = road.width + sidewalkWidth * 2;
+    
     files.forEach((file, i) => {
       // Position along usable portion of road
       const t = startT + ((i + 0.5) / files.length) * usableLength;
@@ -169,10 +176,10 @@ export class GrowingCityEngine {
       // Calculate building size to determine proper offset
       const buildingSize = this.estimateBuildingSize(file);
       
-      // Offset = road edge + building half-size + gap
+      // Offset = TOTAL road edge + building half-size + gap
       const perpendicular = new THREE.Vector2(-tangent.y, tangent.x);
-      const gap = 1.5; // Space between road and building
-      const offset = (road.width / 2 + buildingSize / 2 + gap) * (i % 2 === 0 ? 1 : -1);
+      const gap = 2; // Space between sidewalk edge and building edge
+      const offset = (totalRoadWidth / 2 + buildingSize / 2 + gap) * (i % 2 === 0 ? 1 : -1);
       
       const buildingX = pos.x + perpendicular.x * offset;
       const buildingZ = pos.y + perpendicular.y * offset;
