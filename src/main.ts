@@ -778,12 +778,18 @@ class VectorVisionApp {
     // Update 3D visualization with file contents
     if (this.codeArchitecture) {
       // Load file contents if we have a project path
-      if (this.currentProjectPath && this.backendAvailable) {
-        this.loadFileContents(snapshot.files.map(f => f.path)).then(contents => {
-          this.codeArchitecture?.updateFromSnapshot(snapshot, contents);
-        });
+      // NEW: Use message timeline system!
+      if (snapshot.chats && snapshot.chats.length > 0) {
+        this.codeArchitecture.updateWithMessageTimeline(snapshot);
       } else {
-        this.codeArchitecture.updateFromSnapshot(snapshot);
+        // Fallback to old system if no messages
+        if (this.currentProjectPath && this.backendAvailable) {
+          this.loadFileContents(snapshot.files.map(f => f.path)).then(contents => {
+            this.codeArchitecture?.updateFromSnapshot(snapshot, contents);
+          });
+        } else {
+          this.codeArchitecture.updateFromSnapshot(snapshot);
+        }
       }
     }
     
