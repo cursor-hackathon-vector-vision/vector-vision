@@ -1,0 +1,53 @@
+{
+  "name": "vector-vision",
+  "version": "1.0.0",
+  "description": "Watch your code come to life – 3D visualization of project development from Cursor data and Git history",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:server\"",
+    "dev:frontend": "vite",
+    "dev:server": "npx tsx watch server/index.ts",
+    "build": "tsc && vite build",
+    "build:server": "tsc -p server/tsconfig.json",
+    "preview": "vite preview",
+    "lint": "tsc --noEmit",
+    "start:server": "node server/dist/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cursor-hackathon-vector-vision/vector-vision.git"
+  },
+  "keywords": [
+    "cursor",
+    "visualization",
+    "3d",
+    "threejs",
+    "git",
+    "development",
+    "hackathon"
+  ],
+  "author": "Vector Vision Team",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/cursor-hackathon-vector-vision/vector-vision/issues"
+  },
+  "homepage": "https://github.com/cursor-hackathon-vector-vision/vector-vision#readme",
+  "dependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/three": "^0.182.0",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "glob": "^13.0.0",
+    "simple-git": "^3.30.0",
+    "three": "^0.182.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "zustand": "^5.0.10"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^2.1.4"
+  }
+}
