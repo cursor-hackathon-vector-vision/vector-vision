@@ -4,12 +4,11 @@ import {
   updateConnectionArcs
 } from './advancedLayout';
 import {
-  GridLayoutEngine,
-  createBlockMesh,
-  createGridStreet,
-  createGridDecorations,
-  type GridLayout
-} from './gridLayout';
+  GrowingCityEngine,
+  createGrowingRoad,
+  createGrowingDecorations,
+  type GrowingLayout
+} from './growingCity';
 
 /**
  * LIVING CODE ARCHITECTURE
@@ -107,10 +106,10 @@ export class CodeArchitecture {
   // Ground plane
   // Ground removed for cleaner look
   
-  // Grid layout system
-  private gridLayoutEngine: GridLayoutEngine;
+  // Growing city layout system
+  private growingCityEngine: GrowingCityEngine;
   private connectionArcs: THREE.Group[] = [];
-  private gridLayout: GridLayout | null = null;
+  private growingLayout: GrowingLayout | null = null;
   private streetGroup: THREE.Group;
   private districtGroup: THREE.Group;
   private decorationGroup: THREE.Group;
@@ -118,8 +117,8 @@ export class CodeArchitecture {
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     
-    // Initialize grid layout engine
-    this.gridLayoutEngine = new GridLayoutEngine(50, 12);
+    // Initialize growing city layout engine
+    this.growingCityEngine = new GrowingCityEngine();
     
     // Create groups
     this.groundGroup = new THREE.Group();
@@ -1006,42 +1005,37 @@ export class CodeArchitecture {
       }
     }
     
-    // === GRID LAYOUT ===
+    // === GROWING CITY LAYOUT ===
     
-    // Prepare file data for grid layout
-    const gridFileData = snapshot.files.map(f => ({
+    // Prepare file data with timestamps
+    const growingFileData = snapshot.files.map(f => ({
       path: f.path,
       name: f.name,
       directory: f.directory || '/',
       extension: f.extension,
-      linesOfCode: f.linesOfCode
+      linesOfCode: f.linesOfCode,
+      createdAt: f.createdAt instanceof Date ? f.createdAt.getTime() : undefined
     }));
     
-    // Calculate grid layout
-    this.gridLayout = this.gridLayoutEngine.calculateLayout(gridFileData);
+    // Calculate growing city layout
+    this.growingLayout = this.growingCityEngine.calculateLayout(growingFileData);
     
     // Clear and recreate elements
     this.clearCityElements();
     
-    // Create streets (with dashed center lines and sidewalks)
-    for (const street of this.gridLayout.streets) {
-      const streetMesh = createGridStreet(street);
-      this.streetGroup.add(streetMesh);
+    // Create roads (curved with dashed center lines and sidewalks)
+    for (const road of this.growingLayout.roads) {
+      const roadMesh = createGrowingRoad(road);
+      this.streetGroup.add(roadMesh);
     }
     
-    // Create block markers
-    for (const block of this.gridLayout.blocks) {
-      const blockMesh = createBlockMesh(block);
-      this.districtGroup.add(blockMesh);
-    }
-    
-    // Create decorations (trees, lamps)
-    const decorationsGroup = createGridDecorations(this.gridLayout.decorations);
+    // Create decorations (trees, lamps, cats!)
+    const decorationsGroup = createGrowingDecorations(this.growingLayout.decorations);
     this.decorationGroup.add(decorationsGroup);
     
-    // Create position lookup from grid layout
+    // Create position lookup from growing layout
     const positionMap = new Map<string, { pos: THREE.Vector3; rotation: number }>();
-    for (const pos of this.gridLayout.buildings) {
+    for (const pos of this.growingLayout.buildings) {
       positionMap.set(pos.file.path, { 
         pos: new THREE.Vector3(pos.x, 0, pos.z),
         rotation: pos.rotation
