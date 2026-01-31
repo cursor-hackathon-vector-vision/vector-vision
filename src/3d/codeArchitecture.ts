@@ -3,10 +3,14 @@ import type { ProjectSnapshot, FileNode, ChatMessage } from '../types';
 import { 
   AdvancedLayoutEngine, 
   createDistrictMesh, 
-  createStreetMesh,
   createConnectionArc,
   updateConnectionArcs
 } from './advancedLayout';
+import {
+  createStreetNetwork,
+  addStreetNetworkToScene,
+  type StreetNetwork
+} from './streetSystem';
 
 /**
  * LIVING CODE ARCHITECTURE
@@ -109,6 +113,7 @@ export class CodeArchitecture {
   private districts: THREE.Group[] = [];
   private connectionArcs: THREE.Group[] = [];
   private layoutStreets: THREE.Mesh[] = [];
+  private streetNetwork: StreetNetwork | null = null;
   private districtGroup: THREE.Group;
   private streetGroup: THREE.Group;
   
@@ -1073,13 +1078,22 @@ export class CodeArchitecture {
       this.districts.push(districtMesh);
     }
     
-    // Clear and recreate streets
+    // Clear old streets and create new street network
     this.clearLayoutStreets();
-    for (const street of advancedLayout.streets) {
-      const streetMesh = createStreetMesh(street);
-      this.streetGroup.add(streetMesh);
-      this.layoutStreets.push(streetMesh);
-    }
+    this.clearStreetNetwork();
+    
+    // Create new advanced street network
+    const districtBounds = advancedLayout.districts.map(d => ({
+      x0: d.x0,
+      y0: d.y0,
+      x1: d.x1,
+      y1: d.y1,
+      name: d.directory,
+      color: d.color
+    }));
+    
+    this.streetNetwork = createStreetNetwork(districtBounds, 400, 400);
+    addStreetNetworkToScene(this.streetNetwork, this.streetGroup, this.effectsGroup);
     
     // Create position lookup
     const positionMap = new Map<string, THREE.Vector3>();
@@ -1818,6 +1832,45 @@ export class CodeArchitecture {
     this.layoutStreets = [];
   }
   
+  private clearStreetNetwork(): void {
+    if (!this.streetNetwork) return;
+    
+    // Remove main highway
+    this.streetGroup.remove(this.streetNetwork.mainHighway);
+    this.streetNetwork.mainHighway.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        if (child.material instanceof THREE.Material) {
+          child.material.dispose();
+        }
+      }
+    });
+    
+    // Remove access roads
+    for (const road of this.streetNetwork.accessRoads) {
+      this.streetGroup.remove(road);
+      road.traverse((child) => {
+        if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+          child.geometry.dispose();
+          if (child.material instanceof THREE.Material) {
+            child.material.dispose();
+          }
+        }
+      });
+    }
+    
+    // Remove intersections
+    for (const intersection of this.streetNetwork.intersections) {
+      this.streetGroup.remove(intersection);
+    }
+    
+    // Remove particles
+    this.effectsGroup.remove(this.streetNetwork.dataParticles);
+    this.streetNetwork.dataParticles.geometry.dispose();
+    
+    this.streetNetwork = null;
+  }
+  
   private removeBuilding(building: CodeBuilding): void {
     this.buildingGroup.remove(building.group);
     
@@ -2177,6 +2230,11 @@ export class CodeArchitecture {
     
     // Update connection arc animations
     updateConnectionArcs(this.connectionArcs, this.time);
+    
+    // Update street network animations
+    if (this.streetNetwork) {
+      this.streetNetwork.update(this.time);
+    }
   }
   
   private updateStreetLightFlicker(): void {
