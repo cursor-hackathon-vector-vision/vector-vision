@@ -9,6 +9,27 @@ import {
   createGrowingDecorations,
   type GrowingLayout
 } from './growingCity';
+import {
+  MessageTimelineEngine,
+  type MessageTimelineLayout,
+  type MessageData,
+  type FileData as TimelineFileData
+} from './messageTimeline';
+import {
+  createMessageMarker,
+  createTokenTree,
+  createPark,
+  createFountain,
+  createBench,
+  animateMessage,
+  animateFountain
+} from './timelineRenderers';
+import {
+  createManyCats,
+  createSeagulls,
+  updateAnimalPath,
+  type Animal
+} from './animals';
 
 /**
  * LIVING CODE ARCHITECTURE
@@ -96,6 +117,15 @@ export class CodeArchitecture {
   private groundGroup: THREE.Group;
   private effectsGroup: THREE.Group;
   
+  // NEW: Message Timeline System
+  private messageTimelineMode: boolean = true; // Enable new system by default
+  private messageTimelineEngine: MessageTimelineEngine;
+  private timelineLayout: MessageTimelineLayout | null = null;
+  private timelineGroup: THREE.Group;
+  private messageMarkers: Map<string, THREE.Group> = new Map();
+  private tokenTrees: Map<string, THREE.Group> = new Map();
+  private animals: Animal[] = [];
+  
   // Animation
   private time: number = 0;
   private chatParticles: THREE.Points[] = [];
@@ -120,6 +150,9 @@ export class CodeArchitecture {
     // Initialize growing city layout engine
     this.growingCityEngine = new GrowingCityEngine();
     
+    // Initialize message timeline engine
+    this.messageTimelineEngine = new MessageTimelineEngine();
+    
     // Create groups
     this.groundGroup = new THREE.Group();
     this.groundGroup.name = 'ground';
@@ -135,6 +168,8 @@ export class CodeArchitecture {
     this.connectionGroup.name = 'connections';
     this.effectsGroup = new THREE.Group();
     this.effectsGroup.name = 'effects';
+    this.timelineGroup = new THREE.Group();
+    this.timelineGroup.name = 'timeline';
     
     scene.add(this.groundGroup);
     scene.add(this.streetGroup);
@@ -143,6 +178,7 @@ export class CodeArchitecture {
     scene.add(this.connectionGroup);
     scene.add(this.buildingGroup);
     scene.add(this.effectsGroup);
+    scene.add(this.timelineGroup);
     
     // Setup environment
     this.setupEnvironment();
@@ -2150,6 +2186,12 @@ export class CodeArchitecture {
   public update(delta: number): void {
     this.time += delta;
     
+    // NEW: Animate message timeline elements
+    if (this.messageTimelineMode && this.timelineLayout) {
+      this.animateTimeline(this.time);
+      this.updateAnimals(delta);
+    }
+    
     // Animate buildings
     for (const building of this.buildings.values()) {
       // Smooth rise animation for new buildings
@@ -2370,6 +2412,276 @@ export class CodeArchitecture {
     setTimeout(() => {
       material.emissiveIntensity = originalIntensity;
     }, 500);
+  }
+  
+  /**
+   * UPDATE WITH MESSAGE TIMELINE SYSTEM
+   * The new way - messages drive the visualization!
+   */
+  public updateWithMessageTimeline(snapshot: ProjectSnapshot): void {
+    // Convert data to timeline format
+    const messages: MessageData[] = snapshot.chats.map(chat => ({
+      id: chat.id,
+      timestamp: chat.timestamp.getTime(),
+      role: chat.role,
+      content: chat.content,
+      tokenCost: this.estimateTokenCost(chat),
+      relatedFiles: chat.relatedFiles,
+    }));
+    
+    const files: TimelineFileData[] = snapshot.files.map(file => ({
+      path: file.path,
+      name: file.name,
+      directory: file.path.split('/').slice(0, -1).join('/'),
+      extension: file.extension,
+      linesOfCode: file.linesOfCode || 0,
+      createdAt: snapshot.timestamp.getTime(), // Use snapshot timestamp as proxy
+    }));
+    
+    // Calculate new layout
+    this.timelineLayout = this.messageTimelineEngine.calculateLayout(messages, files);
+    
+    // Clear old timeline elements
+    this.timelineGroup.clear();
+    this.messageMarkers.clear();
+    this.tokenTrees.clear();
+    
+    // Render timeline elements (messages + trees)
+    this.renderTimelineElements(this.timelineLayout);
+    
+    // Render districts
+    this.renderDistricts(this.timelineLayout);
+    
+    // Spawn animals
+    this.spawnAnimals(this.timelineLayout);
+    
+    // Still render buildings using existing system
+    // (but positioned by the new layout)
+    this.updateFromSnapshot(snapshot);
+  }
+  
+  /**
+   * Render timeline elements (messages and token trees)
+   */
+  private renderTimelineElements(layout: MessageTimelineLayout): void {
+    for (const element of layout.timeline) {
+      if (element.type === 'message') {
+        const messageData = element.data as MessageData;
+        const marker = createMessageMarker(messageData);
+        marker.position.copy(element.position);
+        marker.userData.delay = element.delay;
+        
+        this.timelineGroup.add(marker);
+        this.messageMarkers.set(messageData.id, marker);
+      } else if (element.type === 'tree') {
+        const treeData = element.data as import('./messageTimeline').TreeData;
+        const tree = createTokenTree(treeData);
+        tree.position.copy(element.position);
+        tree.userData.delay = element.delay;
+        
+        this.timelineGroup.add(tree);
+        this.tokenTrees.set(treeData.messageId, tree);
+      }
+    }
+  }
+  
+  /**
+   * Render districts with their streets and decorations
+   */
+  private renderDistricts(layout: MessageTimelineLayout): void {
+    for (const district of layout.districts) {
+      // Render district streets
+      for (const street of district.streets) {
+        const road = this.createDistrictRoad(street);
+        this.streetGroup.add(road);
+      }
+      
+      // Render decorations
+      for (const deco of district.decorations) {
+        let mesh: THREE.Group;
+        
+        switch (deco.type) {
+          case 'park':
+            mesh = createPark(deco.scale);
+            break;
+          case 'fountain':
+            mesh = createFountain(deco.scale);
+            break;
+          case 'bench':
+            mesh = createBench(deco.scale);
+            break;
+          case 'tree':
+            mesh = this.createSimpleTree(deco.scale);
+            break;
+          case 'lamp':
+            mesh = this.createSimpleLamp(deco.scale);
+            break;
+          default:
+            continue;
+        }
+        
+        mesh.position.copy(deco.position);
+        mesh.userData.delay = deco.delay;
+        this.decorationGroup.add(mesh);
+      }
+    }
+  }
+  
+  /**
+   * Create a simple district road
+   */
+  private createDistrictRoad(street: any): THREE.Group {
+    const group = new THREE.Group();
+    
+    for (let i = 0; i < street.points.length - 1; i++) {
+      const p1 = street.points[i];
+      const p2 = street.points[i + 1];
+      
+      const length = p1.distanceTo(p2);
+      const angle = Math.atan2(p2.z - p1.z, p2.x - p1.x);
+      const midX = (p1.x + p2.x) / 2;
+      const midZ = (p1.z + p2.z) / 2;
+      
+      // Road surface
+      const roadGeom = new THREE.PlaneGeometry(length, street.width);
+      const roadMat = new THREE.MeshStandardMaterial({
+        color: street.type === 'main' ? 0x404050 : 0x353540,
+        roughness: 0.8,
+      });
+      
+      const road = new THREE.Mesh(roadGeom, roadMat);
+      road.rotation.x = -Math.PI / 2;
+      road.rotation.z = -angle + Math.PI / 2;
+      road.position.set(midX, 0.01, midZ);
+      group.add(road);
+      
+      // Center line
+      if (street.type === 'main') {
+        const lineGeom = new THREE.PlaneGeometry(length, 0.2);
+        const lineMat = new THREE.MeshBasicMaterial({
+          color: 0xffdd00,
+          transparent: true,
+          opacity: 0.6,
+        });
+        
+        const line = new THREE.Mesh(lineGeom, lineMat);
+        line.rotation.x = -Math.PI / 2;
+        line.rotation.z = -angle + Math.PI / 2;
+        line.position.set(midX, 0.02, midZ);
+        group.add(line);
+      }
+    }
+    
+    return group;
+  }
+  
+  /**
+   * Spawn animals (cats and seagulls)
+   */
+  private spawnAnimals(layout: MessageTimelineLayout): void {
+    this.animals = [];
+    
+    for (const spawn of layout.animals) {
+      if (spawn.type === 'cat') {
+        const cats = createManyCats(spawn.path, spawn.count);
+        this.animals.push(...cats);
+        
+        for (const cat of cats) {
+          this.decorationGroup.add(cat.group);
+        }
+      } else if (spawn.type === 'seagull') {
+        const seagulls = createSeagulls(
+          spawn.path[0] || new THREE.Vector3(0, 30, 0),
+          50,
+          spawn.count
+        );
+        this.animals.push(...seagulls);
+        
+        for (const seagull of seagulls) {
+          this.decorationGroup.add(seagull.group);
+        }
+      }
+    }
+  }
+  
+  /**
+   * Update animal animations
+   */
+  private updateAnimals(delta: number): void {
+    for (const animal of this.animals) {
+      updateAnimalPath(animal, delta);
+    }
+  }
+  
+  /**
+   * Animate timeline elements
+   */
+  private animateTimeline(time: number): void {
+    // Animate messages
+    for (const marker of this.messageMarkers.values()) {
+      animateMessage(marker, time);
+    }
+    
+    // Animate fountains
+    this.decorationGroup.children.forEach(child => {
+      if (child.userData.isFountain) {
+        animateFountain(child as THREE.Group, 0.016);
+      }
+    });
+  }
+  
+  /**
+   * Estimate token cost from message
+   */
+  private estimateTokenCost(chat: ChatMessage): number {
+    // Rough estimate: 1 token ≈ 4 characters
+    return Math.ceil(chat.content.length / 4);
+  }
+  
+  /**
+   * Create simple tree (for district decoration)
+   */
+  private createSimpleTree(scale: number): THREE.Group {
+    const tree = new THREE.Group();
+    
+    const trunkGeom = new THREE.CylinderGeometry(0.2 * scale, 0.3 * scale, 1.5 * scale, 6);
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3728 });
+    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.position.y = 0.75 * scale;
+    tree.add(trunk);
+    
+    const crownGeom = new THREE.ConeGeometry(scale, 2 * scale, 6);
+    const crownMat = new THREE.MeshStandardMaterial({ color: 0x3d7a37 });
+    const crown = new THREE.Mesh(crownGeom, crownMat);
+    crown.position.y = 2.5 * scale;
+    tree.add(crown);
+    
+    return tree;
+  }
+  
+  /**
+   * Create simple lamp (for district decoration)
+   */
+  private createSimpleLamp(scale: number): THREE.Group {
+    const lamp = new THREE.Group();
+    
+    const poleGeom = new THREE.CylinderGeometry(0.1 * scale, 0.1 * scale, 3 * scale, 6);
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x333344 });
+    const pole = new THREE.Mesh(poleGeom, poleMat);
+    pole.position.y = 1.5 * scale;
+    lamp.add(pole);
+    
+    const bulbGeom = new THREE.SphereGeometry(0.3 * scale, 8, 8);
+    const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffcc66 });
+    const bulb = new THREE.Mesh(bulbGeom, bulbMat);
+    bulb.position.y = 3 * scale;
+    lamp.add(bulb);
+    
+    const light = new THREE.PointLight(0xffcc66, 2, 10 * scale);
+    light.position.y = 3 * scale;
+    lamp.add(light);
+    
+    return lamp;
   }
   
   /**
