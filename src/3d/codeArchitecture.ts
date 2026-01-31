@@ -186,10 +186,11 @@ export class CodeArchitecture {
     // Streets and districts provide visual grounding
     
     // Optional: Very subtle infinite grid reference
+    // Position BELOW all roads to avoid z-fighting
     const gridHelper = new THREE.GridHelper(400, 80, 0x222244, 0x111122);
-    gridHelper.position.y = -0.05;
+    gridHelper.position.y = -0.1; // Below road baseline
     (gridHelper.material as THREE.Material).transparent = true;
-    (gridHelper.material as THREE.Material).opacity = 0.15;
+    (gridHelper.material as THREE.Material).opacity = 0.1;
     this.groundGroup.add(gridHelper);
   }
   

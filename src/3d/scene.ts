@@ -171,9 +171,11 @@ export class SceneManager {
     this.groundPlane.receiveShadow = true;
     this.scene.add(this.groundPlane);
     
-    // Grid helper
+    // Grid helper - positioned BELOW roads to avoid overlap
     this.gridHelper = new THREE.GridHelper(200, 100, 0x222233, 0x151520);
-    this.gridHelper.position.y = 0.01;
+    this.gridHelper.position.y = -0.1;
+    (this.gridHelper.material as THREE.Material).transparent = true;
+    (this.gridHelper.material as THREE.Material).opacity = 0.1;
     this.scene.add(this.gridHelper);
   }
 

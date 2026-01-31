@@ -129,10 +129,11 @@ export class GrowingCityEngine {
     dirName: string,
     fileCount: number
   ): GrowingRoad {
-    const branchLength = 20 + fileCount * 5;
+    const branchLength = 25 + fileCount * 4;
     
     // SIMPLE STRAIGHT branch road perpendicular to main
-    const startZ = side * 8; // Start at edge of main road
+    // Start overlapping main road by 0.5 for seamless connection
+    const startZ = side * 6.5; // Overlap into main road (main width/2 = 7, so 6.5 overlaps)
     const endZ = startZ + branchLength * side;
     
     const points: THREE.Vector2[] = [
@@ -154,15 +155,20 @@ export class GrowingCityEngine {
     files: GrowingFileData[],
     buildings: GrowingBuildingPosition[]
   ): void {
+    // Skip first 15% and last 10% of road to keep buildings away from intersections
+    const startT = 0.15;
+    const endT = 0.90;
+    const usableLength = endT - startT;
+    
     files.forEach((file, i) => {
-      // Position along road
-      const t = (i + 1) / (files.length + 1);
+      // Position along usable portion of road
+      const t = startT + ((i + 0.5) / files.length) * usableLength;
       const pos = this.getPointOnRoad(road.points, t);
       const tangent = this.getTangentOnRoad(road.points, t);
       
-      // Offset to side of road
+      // Offset to side of road - tighter spacing
       const perpendicular = new THREE.Vector2(-tangent.y, tangent.x);
-      const offset = (road.width / 2 + 4) * (i % 2 === 0 ? 1 : -1);
+      const offset = (road.width / 2 + 3) * (i % 2 === 0 ? 1 : -1);
       
       const buildingX = pos.x + perpendicular.x * offset;
       const buildingZ = pos.y + perpendicular.y * offset;
