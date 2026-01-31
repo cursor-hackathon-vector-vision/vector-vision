@@ -591,23 +591,42 @@ class VectorVisionApp {
       store.getState().setLoading(true);
       this.projectSelectorEl.classList.add('hidden');
       
-      // Generate demo data
+      // LOAD LIVE DATA FROM THIS PROJECT ITSELF!
+      // The visualization visualizes itself - meta!
+      const selfPath = '/mnt/private1/ai-projects/hackathon-cursor-vector-vision/vector-vision';
+      
+      if (this.backendAvailable) {
+        console.log('[Demo] Loading LIVE data from:', selfPath);
+        
+        // Load real project data from backend
+        const projectData = await loadProjectFromBackend(selfPath);
+        
+        if (projectData) {
+          this.currentProjectPath = selfPath;
+          store.getState().setProjectData(projectData);
+          this.updateStats(projectData);
+          this.updateTimeline(projectData);
+          
+          // Start from latest snapshot
+          const latestIndex = projectData.snapshots.length - 1;
+          store.getState().setCurrentSnapshot(latestIndex);
+          this.onSnapshotChange(latestIndex);
+          
+          this.showToast('🎉 Visualizing ITSELF! Meta-Demo loaded!');
+          console.log('[Demo] Loaded', projectData.snapshots.length, 'snapshots');
+          return;
+        }
+      }
+      
+      // Fallback to generated demo data if backend unavailable
+      console.log('[Demo] Backend unavailable, using generated demo data');
       const projectData = generateDemoProject();
-      
-      // Update store
       store.getState().setProjectData(projectData);
-      
-      // Update UI
       this.updateStats(projectData);
       this.updateTimeline(projectData);
-      
-      // Start from the beginning for dramatic effect
       store.getState().setCurrentSnapshot(0);
       this.onSnapshotChange(0);
-      
       this.showToast('Demo project loaded! Press Space to play.');
-      
-      console.log('Demo project loaded');
       
     } catch (error) {
       console.error('Failed to load demo:', error);
