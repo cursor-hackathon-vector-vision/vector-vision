@@ -4,14 +4,12 @@ import {
   updateConnectionArcs
 } from './advancedLayout';
 import {
-  createCleanStreet,
-  type CleanStreet
-} from './cleanStreet';
-import {
-  SimpleLayoutEngine,
-  createDirectoryLabel,
-  type SimpleChatEntry
-} from './simpleLayout';
+  CityLayoutEngine,
+  createCityStreets,
+  createDistrictPlates,
+  createDecorations,
+  type CityLayout
+} from './cityLayout';
 
 /**
  * LIVING CODE ARCHITECTURE
@@ -109,25 +107,29 @@ export class CodeArchitecture {
   // Ground plane
   private ground: THREE.Mesh | null = null;
   
-  // Simple layout system
-  private simpleLayoutEngine: SimpleLayoutEngine;
+  // City layout system
+  private cityLayoutEngine: CityLayoutEngine;
   private connectionArcs: THREE.Group[] = [];
-  private cleanStreet: CleanStreet | null = null;
-  private chatTrees: THREE.Group[] = [];
-  private directoryLabels: THREE.Sprite[] = [];
+  private cityLayout: CityLayout | null = null;
   private streetGroup: THREE.Group;
+  private districtGroup: THREE.Group;
+  private decorationGroup: THREE.Group;
   
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     
-    // Initialize simple layout engine
-    this.simpleLayoutEngine = new SimpleLayoutEngine(300);
+    // Initialize city layout engine
+    this.cityLayoutEngine = new CityLayoutEngine(150);
     
     // Create groups
     this.groundGroup = new THREE.Group();
     this.groundGroup.name = 'ground';
     this.streetGroup = new THREE.Group();
     this.streetGroup.name = 'streets';
+    this.districtGroup = new THREE.Group();
+    this.districtGroup.name = 'districts';
+    this.decorationGroup = new THREE.Group();
+    this.decorationGroup.name = 'decorations';
     this.buildingGroup = new THREE.Group();
     this.buildingGroup.name = 'buildings';
     this.connectionGroup = new THREE.Group();
@@ -137,6 +139,8 @@ export class CodeArchitecture {
     
     scene.add(this.groundGroup);
     scene.add(this.streetGroup);
+    scene.add(this.districtGroup);
+    scene.add(this.decorationGroup);
     scene.add(this.connectionGroup);
     scene.add(this.buildingGroup);
     scene.add(this.effectsGroup);
@@ -1058,10 +1062,10 @@ export class CodeArchitecture {
       }
     }
     
-    // === SIMPLE LAYOUT ===
+    // === CITY LAYOUT ===
     
-    // Prepare file data
-    const simpleFileData = snapshot.files.map(f => ({
+    // Prepare file data for city layout
+    const cityFileData = snapshot.files.map(f => ({
       path: f.path,
       name: f.name,
       directory: f.directory || '/',
@@ -1069,41 +1073,31 @@ export class CodeArchitecture {
       linesOfCode: f.linesOfCode
     }));
     
-    // Prepare chat data
-    const simpleChatData: SimpleChatEntry[] = snapshot.chats.map(chat => ({
-      role: chat.role as 'user' | 'assistant' | 'tool',
-      content: chat.content,
-      timestamp: chat.timestamp instanceof Date ? chat.timestamp.getTime() : Date.now()
-    }));
+    // Calculate city layout
+    this.cityLayout = this.cityLayoutEngine.calculateLayout(cityFileData);
     
-    // Calculate simple layout
-    const layout = this.simpleLayoutEngine.calculateLayout(simpleFileData, simpleChatData);
+    // Clear and recreate streets
+    this.clearCityElements();
     
-    // Clear and recreate clean street (just main road)
-    this.clearCleanStreet();
-    this.cleanStreet = createCleanStreet(300);
-    this.streetGroup.add(this.cleanStreet.group);
+    // Create streets
+    const streetsGroup = createCityStreets(this.cityLayout.streets);
+    this.streetGroup.add(streetsGroup);
     
-    // Clear and create chat trees
-    this.clearChatTrees();
-    for (const treePos of layout.chatTrees) {
-      const tree = this.createChatTreeMesh(treePos);
-      this.streetGroup.add(tree);
-      this.chatTrees.push(tree);
-    }
+    // Create district plates
+    const districtsGroup = createDistrictPlates(this.cityLayout.districts);
+    this.districtGroup.add(districtsGroup);
     
-    // Clear and create directory labels
-    this.clearDirectoryLabels();
-    for (const label of layout.directoryLabels) {
-      const labelSprite = createDirectoryLabel(label);
-      this.streetGroup.add(labelSprite);
-      this.directoryLabels.push(labelSprite);
-    }
+    // Create decorations (trees, lamps, benches, fountain)
+    const decorationsGroup = createDecorations(this.cityLayout.decorations);
+    this.decorationGroup.add(decorationsGroup);
     
-    // Create position lookup from simple layout
-    const positionMap = new Map<string, THREE.Vector3>();
-    for (const pos of layout.buildings) {
-      positionMap.set(pos.file.path, new THREE.Vector3(pos.x, 0, pos.z));
+    // Create position lookup from city layout
+    const positionMap = new Map<string, { pos: THREE.Vector3; rotation: number }>();
+    for (const pos of this.cityLayout.buildings) {
+      positionMap.set(pos.file.path, { 
+        pos: new THREE.Vector3(pos.x, 0, pos.z),
+        rotation: pos.rotation
+      });
     }
     
     // Create or update buildings
@@ -1117,12 +1111,14 @@ export class CodeArchitecture {
         fileWithContent.imports = fileContents[file.path].imports;
       }
       
-      const position = positionMap.get(file.path) || new THREE.Vector3();
+      const posData = positionMap.get(file.path);
+      const position = posData?.pos || new THREE.Vector3();
+      const rotation = posData?.rotation || 0;
       
       if (this.buildings.has(file.path)) {
-        this.updateBuilding(fileWithContent, position);
+        this.updateBuilding(fileWithContent, position, rotation);
       } else {
-        this.createBuilding(fileWithContent, position);
+        this.createBuilding(fileWithContent, position, rotation);
       }
     }
     
@@ -1306,7 +1302,7 @@ export class CodeArchitecture {
     return { width, depth, height, plotSize };
   }
   
-  private createBuilding(file: FileWithContent, position: THREE.Vector3): void {
+  private createBuilding(file: FileWithContent, position: THREE.Vector3, rotation: number = 0): void {
     const colors = FILE_COLORS[file.extension] || FILE_COLORS['default'];
     const isNew = file.status === 'added';
     const isModified = file.status === 'modified';
@@ -1314,6 +1310,7 @@ export class CodeArchitecture {
     // Create building group
     const group = new THREE.Group();
     group.position.copy(position);
+    group.rotation.y = rotation;
     
     // Calculate smart dimensions
     const dims = this.calculateBuildingDimensions(file);
@@ -1769,13 +1766,14 @@ export class CodeArchitecture {
     return sprite;
   }
   
-  private updateBuilding(file: FileWithContent, position: THREE.Vector3): void {
+  private updateBuilding(file: FileWithContent, position: THREE.Vector3, rotation: number = 0): void {
     const building = this.buildings.get(file.path);
     if (!building) return;
     
     building.fileNode = file;
     building.position.copy(position);
     building.group.position.copy(position);
+    building.group.rotation.y = rotation;
     
     // Update material if status changed
     const material = building.mesh.material as THREE.MeshStandardMaterial;
@@ -1806,72 +1804,52 @@ export class CodeArchitecture {
     this.connectionArcs = [];
   }
   
-  private clearCleanStreet(): void {
-    if (!this.cleanStreet) return;
-    
-    this.streetGroup.remove(this.cleanStreet.group);
-    this.cleanStreet.group.traverse((child) => {
-      if (child instanceof THREE.Mesh || child instanceof THREE.Points) {
-        child.geometry.dispose();
+  private clearCityElements(): void {
+    // Clear streets
+    this.streetGroup.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.Points || child instanceof THREE.Line) {
+        child.geometry?.dispose();
         if (child.material instanceof THREE.Material) {
           child.material.dispose();
         }
       }
     });
+    while (this.streetGroup.children.length > 0) {
+      this.streetGroup.remove(this.streetGroup.children[0]);
+    }
     
-    this.cleanStreet = null;
-  }
-  
-  private clearChatTrees(): void {
-    for (const tree of this.chatTrees) {
-      this.streetGroup.remove(tree);
-      tree.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
-          if (child.material instanceof THREE.Material) {
-            child.material.dispose();
+    // Clear districts
+    this.districtGroup.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.Sprite) {
+        if (child instanceof THREE.Mesh) child.geometry?.dispose();
+        if (child.material instanceof THREE.Material) {
+          if (child.material instanceof THREE.SpriteMaterial && child.material.map) {
+            child.material.map.dispose();
           }
+          child.material.dispose();
         }
-      });
-    }
-    this.chatTrees = [];
-  }
-  
-  private clearDirectoryLabels(): void {
-    for (const label of this.directoryLabels) {
-      this.streetGroup.remove(label);
-      if (label.material instanceof THREE.SpriteMaterial) {
-        label.material.map?.dispose();
-        label.material.dispose();
       }
-    }
-    this.directoryLabels = [];
-  }
-  
-  // Create chat tree based on position data
-  private createChatTreeMesh(pos: { chat: SimpleChatEntry; x: number; z: number; treeType: 'pine' | 'round' | 'cyber'; scale: number }): THREE.Group {
-    let tree: THREE.Group;
-    
-    switch (pos.treeType) {
-      case 'pine':
-        tree = this.createPineTreeMesh();
-        break;
-      case 'round':
-        tree = this.createRoundTreeMesh();
-        break;
-      case 'cyber':
-        tree = this.createCyberTreeMesh();
-        break;
+    });
+    while (this.districtGroup.children.length > 0) {
+      this.districtGroup.remove(this.districtGroup.children[0]);
     }
     
-    tree.scale.setScalar(pos.scale);
-    tree.position.set(pos.x, 0, pos.z);
-    tree.userData = { isChatTree: true, chat: pos.chat };
-    
-    return tree;
+    // Clear decorations
+    this.decorationGroup.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        child.geometry?.dispose();
+        if (child.material instanceof THREE.Material) {
+          child.material.dispose();
+        }
+      }
+    });
+    while (this.decorationGroup.children.length > 0) {
+      this.decorationGroup.remove(this.decorationGroup.children[0]);
+    }
   }
   
-  // Tree factory methods
+  // @ts-ignore - Legacy tree methods, now handled by cityLayout
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private createPineTreeMesh(): THREE.Group {
     const group = new THREE.Group();
     
@@ -1911,6 +1889,8 @@ export class CodeArchitecture {
     return group;
   }
   
+  // @ts-ignore - Legacy tree method
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private createRoundTreeMesh(): THREE.Group {
     const group = new THREE.Group();
     
@@ -1942,6 +1922,8 @@ export class CodeArchitecture {
     return group;
   }
   
+  // @ts-ignore - Legacy tree method
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private createCyberTreeMesh(): THREE.Group {
     const group = new THREE.Group();
     
@@ -2346,11 +2328,6 @@ export class CodeArchitecture {
     
     // Update connection arc animations
     updateConnectionArcs(this.connectionArcs, this.time);
-    
-    // Update street network animations
-    if (this.cleanStreet) {
-      this.cleanStreet.update(this.time);
-    }
   }
   
   private updateStreetLightFlicker(): void {
