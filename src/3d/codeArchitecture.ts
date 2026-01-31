@@ -105,7 +105,7 @@ export class CodeArchitecture {
   private cats: StreetCat[] = [];
   
   // Ground plane
-  private ground: THREE.Mesh | null = null;
+  // Ground removed for cleaner look
   
   // City layout system
   private cityLayoutEngine: CityLayoutEngine;
@@ -150,46 +150,30 @@ export class CodeArchitecture {
   }
   
   private setupEnvironment(): void {
-    // Soft gradient background (set via scene background)
-    const canvas = document.createElement('canvas');
-    canvas.width = 2;
-    canvas.height = 512;
-    const ctx = canvas.getContext('2d')!;
+    // NO background - transparent/none
+    this.scene.background = null;
     
-    // Create soft gradient - slightly brighter
-    const gradient = ctx.createLinearGradient(0, 0, 0, 512);
-    gradient.addColorStop(0, '#1e2a4a');    // Blue top
-    gradient.addColorStop(0.5, '#152238');  // Mid
-    gradient.addColorStop(1, '#0a1628');    // Dark bottom
-    
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 2, 512);
-    
-    const bgTexture = new THREE.CanvasTexture(canvas);
-    bgTexture.needsUpdate = true;
-    this.scene.background = bgTexture;
-    
-    // More ambient light for better visibility
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    // Bright ambient light for good visibility
+    const ambient = new THREE.AmbientLight(0xffffff, 0.8);
     this.scene.add(ambient);
     
     // Directional light (sun-like)
-    const directional = new THREE.DirectionalLight(0xffffff, 0.8);
+    const directional = new THREE.DirectionalLight(0xffffff, 1.0);
     directional.position.set(50, 100, 50);
     directional.castShadow = true;
     this.scene.add(directional);
     
     // Second directional for fill
-    const directional2 = new THREE.DirectionalLight(0x4fc3f7, 0.3);
+    const directional2 = new THREE.DirectionalLight(0x4fc3f7, 0.4);
     directional2.position.set(-50, 50, -50);
     this.scene.add(directional2);
     
     // Hemisphere light for soft fill
-    const hemi = new THREE.HemisphereLight(0x88aaff, 0x444466, 0.4);
+    const hemi = new THREE.HemisphereLight(0xaaccff, 0x444466, 0.5);
     this.scene.add(hemi);
     
-    // Create the futuristic ground with streets
-    this.createFuturisticGround();
+    // Minimal ground setup (just street lights, no ground plane)
+    this.createMinimalGround();
     
     // Add floating particles in background
     this.createAmbientParticles();
@@ -198,58 +182,16 @@ export class CodeArchitecture {
     this.createStreetCats();
   }
   
-  private createFuturisticGround(): void {
-    // Main ground plane - dark with slight glow - larger to cover all districts
-    const groundSize = 500;
-    const groundGeometry = new THREE.PlaneGeometry(groundSize, groundSize, 100, 100);
+  private createMinimalGround(): void {
+    // NO ground plane - just a thin reference plane for shadows
+    // Streets and districts provide visual grounding
     
-    // Create ground texture with grid pattern
-    const groundCanvas = document.createElement('canvas');
-    groundCanvas.width = 1024;
-    groundCanvas.height = 1024;
-    const gctx = groundCanvas.getContext('2d')!;
-    
-    // Dark base
-    gctx.fillStyle = '#0a1020';
-    gctx.fillRect(0, 0, 1024, 1024);
-    
-    // Subtle grid
-    gctx.strokeStyle = '#1a2a4a';
-    gctx.lineWidth = 1;
-    const gridSpacing = 32;
-    for (let i = 0; i <= 1024; i += gridSpacing) {
-      gctx.beginPath();
-      gctx.moveTo(i, 0);
-      gctx.lineTo(i, 1024);
-      gctx.stroke();
-      gctx.beginPath();
-      gctx.moveTo(0, i);
-      gctx.lineTo(1024, i);
-      gctx.stroke();
-    }
-    
-    const groundTexture = new THREE.CanvasTexture(groundCanvas);
-    groundTexture.wrapS = THREE.RepeatWrapping;
-    groundTexture.wrapT = THREE.RepeatWrapping;
-    groundTexture.repeat.set(8, 8);
-    
-    const groundMaterial = new THREE.MeshStandardMaterial({
-      map: groundTexture,
-      roughness: 0.9,
-      metalness: 0.1,
-    });
-    
-    this.ground = new THREE.Mesh(groundGeometry, groundMaterial);
-    this.ground.rotation.x = -Math.PI / 2;
-    this.ground.position.y = -0.1;
-    this.ground.receiveShadow = true;
-    this.groundGroup.add(this.ground);
-    
-    // NOTE: Streets are now created by AdvancedLayoutEngine in updateFromSnapshot()
-    // Old street system disabled to prevent duplicates
-    
-    // Add street lights along where the main street will be
-    this.createStreetLights();
+    // Optional: Very subtle infinite grid reference
+    const gridHelper = new THREE.GridHelper(400, 80, 0x222244, 0x111122);
+    gridHelper.position.y = -0.05;
+    (gridHelper.material as THREE.Material).transparent = true;
+    (gridHelper.material as THREE.Material).opacity = 0.15;
+    this.groundGroup.add(gridHelper);
   }
   
   // @ts-ignore - Deprecated: Streets now created by AdvancedLayoutEngine
@@ -545,6 +487,8 @@ export class CodeArchitecture {
     return sprite;
   }
   
+  // @ts-ignore - Legacy street lights, may be re-enabled later
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private createStreetLights(): void {
     // Add street lights along the main road
     const lightPositions = [

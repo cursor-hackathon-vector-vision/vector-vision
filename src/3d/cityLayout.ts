@@ -55,25 +55,31 @@ export interface CityDecoration {
   scale: number;
 }
 
-// File type to district mapping
-const FILE_TYPE_DISTRICTS: Record<string, { name: string; color: number; angle: number }> = {
-  '.ts': { name: 'TypeScript Core', color: 0x3178c6, angle: 0 },
-  '.tsx': { name: 'React Components', color: 0x61dafb, angle: Math.PI / 3 },
-  '.js': { name: 'JavaScript', color: 0xf7df1e, angle: 2 * Math.PI / 3 },
-  '.css': { name: 'Styles', color: 0x264de4, angle: Math.PI },
-  '.json': { name: 'Config', color: 0x5a5a5a, angle: 4 * Math.PI / 3 },
-  '.md': { name: 'Documentation', color: 0x083fa1, angle: 5 * Math.PI / 3 },
-  'default': { name: 'Other', color: 0x888888, angle: Math.PI / 2 },
-};
+// Minimum angle between districts (in radians) - prevents crowding
+const MIN_DISTRICT_ANGLE = Math.PI / 4; // 45 degrees minimum
+
+// District color palette
+const DISTRICT_COLORS = [
+  0x3178c6, // TypeScript blue
+  0x61dafb, // React cyan
+  0xf7df1e, // JavaScript yellow
+  0x264de4, // CSS blue
+  0xff6b6b, // Red
+  0x4ecdc4, // Teal
+  0x95e1d3, // Mint
+  0xf38181, // Coral
+  0xaa96da, // Lavender
+  0xfcbad3, // Pink
+];
 
 /**
- * City Layout Engine
+ * City Layout Engine with proper spacing and sub-streets
  */
 export class CityLayoutEngine {
   private centerPlazaRadius: number;
   
   constructor(_cityRadius: number = 150) {
-    this.centerPlazaRadius = 30;
+    this.centerPlazaRadius = 25;
   }
   
   public calculateLayout(files: CityFileData[]): CityLayout {
@@ -84,37 +90,48 @@ export class CityLayoutEngine {
     
     // Group files by extension
     const filesByType = this.groupByExtension(files);
+    const numDistricts = filesByType.size;
+    
+    // Calculate evenly spaced angles with minimum spacing
+    const angleStep = Math.max(MIN_DISTRICT_ANGLE, (2 * Math.PI) / numDistricts);
     
     // Create districts for each file type
     let districtIndex = 0;
     for (const [ext, districtFiles] of filesByType) {
-      const config = FILE_TYPE_DISTRICTS[ext] || FILE_TYPE_DISTRICTS['default'];
-      const angle = config.angle + (districtIndex * 0.1); // Slight offset
-      const distanceFromCenter = this.centerPlazaRadius + 40 + (districtIndex % 3) * 20;
+      // Evenly distribute angles around the circle
+      const angle = districtIndex * angleStep;
+      
+      // Vary distance based on file count (bigger districts further out)
+      const baseDistance = this.centerPlazaRadius + 50;
+      const distanceVariation = Math.sqrt(districtFiles.length) * 5;
+      const distanceFromCenter = baseDistance + distanceVariation;
+      
+      const districtRadius = 15 + Math.sqrt(districtFiles.length) * 6;
+      const color = DISTRICT_COLORS[districtIndex % DISTRICT_COLORS.length];
       
       const district: CityDistrict = {
-        name: config.name,
+        name: this.getDistrictName(ext),
         centerX: Math.cos(angle) * distanceFromCenter,
         centerZ: Math.sin(angle) * distanceFromCenter,
-        radius: 15 + Math.sqrt(districtFiles.length) * 8,
-        color: config.color,
+        radius: districtRadius,
+        color: color,
         files: districtFiles,
       };
       districts.push(district);
       
-      // Create street from center to district
+      // Create main street from center to district
       streets.push({
         start: new THREE.Vector2(0, 0),
         end: new THREE.Vector2(district.centerX, district.centerZ),
-        width: 6,
+        width: 5,
         type: 'main',
       });
       
-      // Position buildings in district (spiral pattern)
-      this.positionBuildingsInDistrict(district, buildings);
+      // Position buildings with sub-street system
+      this.positionBuildingsWithSubStreets(district, buildings, streets);
       
-      // Add decorations around district
-      this.addDistrictDecorations(district, decorations);
+      // Add trees around district
+      this.addDistrictTrees(district, decorations);
       
       districtIndex++;
     }
@@ -122,10 +139,23 @@ export class CityLayoutEngine {
     // Add central plaza decorations
     this.addCentralPlazaDecorations(decorations);
     
-    // Add connecting streets between adjacent districts
-    this.addConnectingStreets(districts, streets);
-    
     return { buildings, streets, districts, decorations };
+  }
+  
+  private getDistrictName(ext: string): string {
+    const names: Record<string, string> = {
+      '.ts': 'TypeScript',
+      '.tsx': 'React',
+      '.js': 'JavaScript',
+      '.jsx': 'JSX',
+      '.css': 'Styles',
+      '.scss': 'SCSS',
+      '.json': 'Config',
+      '.md': 'Docs',
+      '.html': 'HTML',
+      '.py': 'Python',
+    };
+    return names[ext] || ext.replace('.', '').toUpperCase();
   }
   
   private groupByExtension(files: CityFileData[]): Map<string, CityFileData[]> {
@@ -143,56 +173,88 @@ export class CityLayoutEngine {
     return new Map([...groups.entries()].sort((a, b) => b[1].length - a[1].length));
   }
   
-  private positionBuildingsInDistrict(district: CityDistrict, buildings: CityBuildingPosition[]): void {
+  /**
+   * Position buildings along sub-streets radiating from district center
+   */
+  private positionBuildingsWithSubStreets(
+    district: CityDistrict, 
+    buildings: CityBuildingPosition[],
+    streets: CityStreet[]
+  ): void {
     const files = district.files;
     const centerX = district.centerX;
     const centerZ = district.centerZ;
     
-    // Spiral layout
-    const goldenAngle = Math.PI * (3 - Math.sqrt(5)); // ~137.5 degrees
+    if (files.length === 0) return;
     
-    files.forEach((file, i) => {
-      // Spiral positioning
-      const r = 5 + Math.sqrt(i) * 6;
-      const theta = i * goldenAngle;
+    // Calculate number of sub-streets based on file count
+    const numSubStreets = Math.max(3, Math.min(6, Math.ceil(files.length / 4)));
+    const filesPerStreet = Math.ceil(files.length / numSubStreets);
+    
+    // Angle toward main plaza (to avoid sub-streets pointing back)
+    const angleToCenter = Math.atan2(-centerZ, -centerX);
+    
+    for (let streetIdx = 0; streetIdx < numSubStreets; streetIdx++) {
+      // Fan out sub-streets in a semi-circle away from center
+      const streetAngleSpread = Math.PI * 0.8; // 144 degree spread
+      const streetAngle = angleToCenter + Math.PI + 
+        (streetIdx - (numSubStreets - 1) / 2) * (streetAngleSpread / Math.max(1, numSubStreets - 1));
       
-      const x = centerX + r * Math.cos(theta);
-      const z = centerZ + r * Math.sin(theta);
+      // Sub-street length based on files on this street
+      const streetLength = 8 + filesPerStreet * 5;
       
-      // Face toward district center
-      const rotation = Math.atan2(centerZ - z, centerX - x);
+      // Create sub-street
+      const streetEndX = centerX + Math.cos(streetAngle) * streetLength;
+      const streetEndZ = centerZ + Math.sin(streetAngle) * streetLength;
       
-      buildings.push({ file, x, z, rotation });
-    });
+      streets.push({
+        start: new THREE.Vector2(centerX, centerZ),
+        end: new THREE.Vector2(streetEndX, streetEndZ),
+        width: 2.5,
+        type: 'secondary',
+      });
+      
+      // Place buildings along this sub-street
+      const startFileIdx = streetIdx * filesPerStreet;
+      const endFileIdx = Math.min(startFileIdx + filesPerStreet, files.length);
+      
+      for (let i = startFileIdx; i < endFileIdx; i++) {
+        const file = files[i];
+        const positionOnStreet = (i - startFileIdx + 1) / (filesPerStreet + 1);
+        
+        // Alternate sides of the street
+        const side = (i % 2 === 0) ? 1 : -1;
+        const sideOffset = 4; // Distance from street center
+        
+        // Position along street
+        const alongX = centerX + Math.cos(streetAngle) * streetLength * positionOnStreet;
+        const alongZ = centerZ + Math.sin(streetAngle) * streetLength * positionOnStreet;
+        
+        // Perpendicular offset
+        const perpAngle = streetAngle + Math.PI / 2;
+        const x = alongX + Math.cos(perpAngle) * sideOffset * side;
+        const z = alongZ + Math.sin(perpAngle) * sideOffset * side;
+        
+        // Face the street
+        const rotation = streetAngle + (side > 0 ? -Math.PI / 2 : Math.PI / 2);
+        
+        buildings.push({ file, x, z, rotation });
+      }
+    }
   }
   
-  private addDistrictDecorations(district: CityDistrict, decorations: CityDecoration[]): void {
-    // Trees around district perimeter
-    const treeCount = Math.floor(district.radius / 3);
+  private addDistrictTrees(district: CityDistrict, decorations: CityDecoration[]): void {
+    // Fewer trees, just at district corners
+    const treeCount = 6;
     for (let i = 0; i < treeCount; i++) {
       const angle = (i / treeCount) * Math.PI * 2;
-      const r = district.radius + 5 + Math.random() * 5;
+      const r = district.radius + 8;
       decorations.push({
         type: 'tree',
         x: district.centerX + Math.cos(angle) * r,
         z: district.centerZ + Math.sin(angle) * r,
-        scale: 0.8 + Math.random() * 0.4,
+        scale: 0.7 + Math.random() * 0.3,
       });
-    }
-    
-    // Lamps along main street to district
-    const steps = 5;
-    for (let i = 1; i < steps; i++) {
-      const t = i / steps;
-      const x = district.centerX * t;
-      const z = district.centerZ * t;
-      
-      // Lamps on both sides of street
-      const perpX = -district.centerZ / Math.sqrt(district.centerX ** 2 + district.centerZ ** 2) * 4;
-      const perpZ = district.centerX / Math.sqrt(district.centerX ** 2 + district.centerZ ** 2) * 4;
-      
-      decorations.push({ type: 'lamp', x: x + perpX, z: z + perpZ, scale: 1 });
-      decorations.push({ type: 'lamp', x: x - perpX, z: z - perpZ, scale: 1 });
     }
   }
   
@@ -213,30 +275,14 @@ export class CityLayoutEngine {
     }
     
     // Trees around plaza
-    for (let i = 0; i < 12; i++) {
-      const angle = (i / 12) * Math.PI * 2 + 0.1;
-      const r = this.centerPlazaRadius + 3;
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * Math.PI * 2 + 0.1;
+      const r = this.centerPlazaRadius + 5;
       decorations.push({
         type: 'tree',
         x: Math.cos(angle) * r,
         z: Math.sin(angle) * r,
-        scale: 1.2,
-      });
-    }
-  }
-  
-  private addConnectingStreets(districts: CityDistrict[], streets: CityStreet[]): void {
-    // Connect adjacent districts with secondary streets
-    for (let i = 0; i < districts.length; i++) {
-      const nextI = (i + 1) % districts.length;
-      const d1 = districts[i];
-      const d2 = districts[nextI];
-      
-      streets.push({
-        start: new THREE.Vector2(d1.centerX, d1.centerZ),
-        end: new THREE.Vector2(d2.centerX, d2.centerZ),
-        width: 3,
-        type: 'secondary',
+        scale: 1,
       });
     }
   }
@@ -307,32 +353,19 @@ export function createCityStreets(streets: CityStreet[]): THREE.Group {
 }
 
 /**
- * Create district ground plates
+ * Create district markers - just glowing rings, no filled plates
  */
 export function createDistrictPlates(districts: CityDistrict[]): THREE.Group {
   const group = new THREE.Group();
-  group.name = 'districtPlates';
+  group.name = 'districtMarkers';
   
   for (const district of districts) {
-    // Circular ground plate
-    const plateGeom = new THREE.CircleGeometry(district.radius, 32);
-    const plateMat = new THREE.MeshStandardMaterial({
-      color: district.color,
-      transparent: true,
-      opacity: 0.15,
-      roughness: 0.8,
-    });
-    const plate = new THREE.Mesh(plateGeom, plateMat);
-    plate.rotation.x = -Math.PI / 2;
-    plate.position.set(district.centerX, 0.01, district.centerZ);
-    group.add(plate);
-    
-    // Glowing border ring
-    const ringGeom = new THREE.RingGeometry(district.radius - 0.5, district.radius, 64);
+    // Just a glowing ring outline - no filled plate
+    const ringGeom = new THREE.RingGeometry(district.radius - 0.3, district.radius, 64);
     const ringMat = new THREE.MeshBasicMaterial({
       color: district.color,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.4,
       side: THREE.DoubleSide,
     });
     const ring = new THREE.Mesh(ringGeom, ringMat);
@@ -342,23 +375,12 @@ export function createDistrictPlates(districts: CityDistrict[]): THREE.Group {
     
     // District label
     const label = createDistrictLabel(district.name, district.color);
-    label.position.set(district.centerX, 8, district.centerZ);
+    label.position.set(district.centerX, 10, district.centerZ);
     group.add(label);
   }
   
-  // Central plaza
-  const plazaGeom = new THREE.CircleGeometry(30, 64);
-  const plazaMat = new THREE.MeshStandardMaterial({
-    color: 0x2a2a4e,
-    roughness: 0.7,
-  });
-  const plaza = new THREE.Mesh(plazaGeom, plazaMat);
-  plaza.rotation.x = -Math.PI / 2;
-  plaza.position.y = 0.015;
-  group.add(plaza);
-  
-  // Plaza ring
-  const plazaRingGeom = new THREE.RingGeometry(29, 30, 64);
+  // Central plaza - just a ring, no fill
+  const plazaRingGeom = new THREE.RingGeometry(24, 25, 64);
   const plazaRingMat = new THREE.MeshBasicMaterial({
     color: 0x00ffff,
     transparent: true,

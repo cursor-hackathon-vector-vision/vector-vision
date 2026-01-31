@@ -38,11 +38,9 @@ export class SceneManager {
     this.raycaster = new THREE.Raycaster();
     this.mouse = new THREE.Vector2();
     
-    // Initialize scene
+    // Initialize scene - no background, no fog
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0a0a0f);
-    // Fog extended for larger scenes
-    this.scene.fog = new THREE.Fog(0x0a0a0f, 100, 800);
+    this.scene.background = null; // Transparent background
     
     // Initialize camera
     const aspect = container.clientWidth / container.clientHeight;
