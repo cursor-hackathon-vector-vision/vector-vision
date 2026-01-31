@@ -501,3 +501,177 @@ export function addStreetNetworkToScene(
   
   effectsGroup.add(network.dataParticles);
 }
+
+/**
+ * Create low-poly trees along the roadside
+ */
+export function createRoadsideTrees(
+  roadLength: number,
+  roadWidth: number = 12,
+  sidewalkWidth: number = 2
+): THREE.Group {
+  const treesGroup = new THREE.Group();
+  
+  // Tree spacing
+  const treeSpacing = 25;
+  const treeCount = Math.floor(roadLength / treeSpacing);
+  const halfLength = roadLength / 2;
+  
+  // Distance from road center to tree line
+  const treeLineZ = roadWidth / 2 + sidewalkWidth + 3;
+  
+  for (let i = 0; i < treeCount; i++) {
+    const x = -halfLength + i * treeSpacing + (Math.random() - 0.5) * 8;
+    
+    // Trees on both sides
+    for (const side of [-1, 1]) {
+      const z = side * treeLineZ + (Math.random() - 0.5) * 2;
+      
+      // Random tree type
+      const treeType = Math.random();
+      let tree: THREE.Group;
+      
+      if (treeType < 0.4) {
+        tree = createPineTree();
+      } else if (treeType < 0.7) {
+        tree = createRoundTree();
+      } else {
+        tree = createCyberTree();
+      }
+      
+      // Random scale variation
+      const scale = 0.8 + Math.random() * 0.6;
+      tree.scale.set(scale, scale, scale);
+      tree.position.set(x, 0, z);
+      tree.rotation.y = Math.random() * Math.PI * 2;
+      
+      treesGroup.add(tree);
+    }
+  }
+  
+  return treesGroup;
+}
+
+/**
+ * Low-poly pine tree
+ */
+function createPineTree(): THREE.Group {
+  const group = new THREE.Group();
+  
+  // Trunk
+  const trunkGeom = new THREE.CylinderGeometry(0.15, 0.25, 1.5, 6);
+  const trunkMat = new THREE.MeshStandardMaterial({
+    color: 0x4a3728,
+    roughness: 0.9,
+    flatShading: true,
+  });
+  const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+  trunk.position.y = 0.75;
+  group.add(trunk);
+  
+  // Foliage layers (3 cones stacked)
+  const foliageMat = new THREE.MeshStandardMaterial({
+    color: 0x2d5a27,
+    roughness: 0.8,
+    flatShading: true,
+    emissive: new THREE.Color(0x1a3a1a),
+    emissiveIntensity: 0.2,
+  });
+  
+  const layers = [
+    { radius: 1.2, height: 2, y: 2 },
+    { radius: 0.9, height: 1.8, y: 3.2 },
+    { radius: 0.6, height: 1.5, y: 4.2 },
+  ];
+  
+  for (const layer of layers) {
+    const coneGeom = new THREE.ConeGeometry(layer.radius, layer.height, 6);
+    const cone = new THREE.Mesh(coneGeom, foliageMat);
+    cone.position.y = layer.y;
+    group.add(cone);
+  }
+  
+  return group;
+}
+
+/**
+ * Low-poly round/deciduous tree
+ */
+function createRoundTree(): THREE.Group {
+  const group = new THREE.Group();
+  
+  // Trunk
+  const trunkGeom = new THREE.CylinderGeometry(0.2, 0.3, 2, 6);
+  const trunkMat = new THREE.MeshStandardMaterial({
+    color: 0x5c4033,
+    roughness: 0.9,
+    flatShading: true,
+  });
+  const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+  trunk.position.y = 1;
+  group.add(trunk);
+  
+  // Foliage (icosahedron for organic look)
+  const foliageGeom = new THREE.IcosahedronGeometry(1.5, 0);
+  const foliageMat = new THREE.MeshStandardMaterial({
+    color: 0x3d7a3d,
+    roughness: 0.8,
+    flatShading: true,
+    emissive: new THREE.Color(0x1a4a1a),
+    emissiveIntensity: 0.15,
+  });
+  const foliage = new THREE.Mesh(foliageGeom, foliageMat);
+  foliage.position.y = 3;
+  foliage.scale.set(1, 1.2, 1);
+  group.add(foliage);
+  
+  return group;
+}
+
+/**
+ * Futuristic cyber tree with glow
+ */
+function createCyberTree(): THREE.Group {
+  const group = new THREE.Group();
+  
+  // Metallic trunk
+  const trunkGeom = new THREE.CylinderGeometry(0.1, 0.2, 2.5, 8);
+  const trunkMat = new THREE.MeshStandardMaterial({
+    color: 0x2a2a3a,
+    roughness: 0.3,
+    metalness: 0.8,
+  });
+  const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+  trunk.position.y = 1.25;
+  group.add(trunk);
+  
+  // Glowing crystal foliage
+  const crystalGeom = new THREE.OctahedronGeometry(1, 0);
+  const crystalMat = new THREE.MeshBasicMaterial({
+    color: 0x00ffaa,
+    transparent: true,
+    opacity: 0.7,
+  });
+  const crystal = new THREE.Mesh(crystalGeom, crystalMat);
+  crystal.position.y = 3.5;
+  crystal.scale.set(0.8, 1.5, 0.8);
+  group.add(crystal);
+  
+  // Inner glow
+  const innerGeom = new THREE.OctahedronGeometry(0.5, 0);
+  const innerMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.9,
+  });
+  const inner = new THREE.Mesh(innerGeom, innerMat);
+  inner.position.y = 3.5;
+  group.add(inner);
+  
+  // Small point light
+  const light = new THREE.PointLight(0x00ffaa, 0.5, 8);
+  light.position.y = 3.5;
+  group.add(light);
+  
+  return group;
+}

@@ -9,6 +9,7 @@ import {
 import {
   createStreetNetwork,
   addStreetNetworkToScene,
+  createRoadsideTrees,
   type StreetNetwork
 } from './streetSystem';
 
@@ -1097,6 +1098,10 @@ export class CodeArchitecture {
     
     this.streetNetwork = createStreetNetwork(districtBounds, 400, 400);
     addStreetNetworkToScene(this.streetNetwork, this.streetGroup, this.effectsGroup);
+    
+    // Add roadside trees for atmosphere
+    const trees = createRoadsideTrees(400, 12, 2);
+    this.streetGroup.add(trees);
     
     // Create position lookup
     const positionMap = new Map<string, THREE.Vector3>();

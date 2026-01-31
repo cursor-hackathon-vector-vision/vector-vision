@@ -19,6 +19,7 @@ export interface FileData {
   linesOfCode: number;
   imports?: string[];
   size?: number;
+  createdAt?: number; // Timestamp for timeline positioning
 }
 
 export interface DistrictLayout {
@@ -153,7 +154,8 @@ export class AdvancedLayoutEngine {
   }
   
   /**
-   * Calculate district layouts using squarified treemap
+   * Calculate district layouts - placed on SIDES of main highway (not crossing it)
+   * Main highway runs along z=0, districts are north (z>20) and south (z<-20)
    */
   private calculateDistrictLayouts(
     hierarchy: Map<string, { files: FileData[]; totalLOC: number; depth: number; children: string[] }>
@@ -164,10 +166,9 @@ export class AdvancedLayoutEngine {
     const data: { value: number; directory: string; depth: number; files: FileData[] }[] = [];
     
     hierarchy.forEach((info, dir) => {
-      // Only include leaf directories or directories with files
       if (info.files.length > 0 || info.children.length === 0) {
         data.push({
-          value: Math.max(info.totalLOC, 100), // Minimum size
+          value: Math.max(info.totalLOC, 100),
           directory: dir,
           depth: info.depth,
           files: info.files
@@ -178,29 +179,62 @@ export class AdvancedLayoutEngine {
     // Sort by value for better layout
     data.sort((a, b) => b.value - a.value);
     
-    // Apply squarified treemap
-    const container = {
+    // Split data into north and south sides
+    const northData = data.filter((_, i) => i % 2 === 0);
+    const southData = data.filter((_, i) => i % 2 === 1);
+    
+    // Highway clearance zone (main street area)
+    const highwayClearance = 20;
+    
+    // North side container (z > 20)
+    const northContainer = {
       x0: -this.totalWidth / 2 + this.padding,
-      y0: -this.totalDepth / 2 + this.padding,
+      y0: highwayClearance,
       x1: this.totalWidth / 2 - this.padding,
       y1: this.totalDepth / 2 - this.padding
     };
     
-    const layout = squarify(data, container);
+    // South side container (z < -20)
+    const southContainer = {
+      x0: -this.totalWidth / 2 + this.padding,
+      y0: -this.totalDepth / 2 + this.padding,
+      x1: this.totalWidth / 2 - this.padding,
+      y1: -highwayClearance
+    };
     
-    // Convert to our district format
-    for (const rect of layout) {
-      const depth = rect.depth || 0;
-      districts.push({
-        directory: rect.directory,
-        x0: rect.x0 + this.padding,
-        y0: rect.y0 + this.padding,
-        x1: rect.x1 - this.padding,
-        y1: rect.y1 - this.padding,
-        depth,
-        color: DISTRICT_COLORS[Math.min(depth, DISTRICT_COLORS.length - 1)],
-        files: rect.files || []
-      });
+    // Apply squarified treemap to both sides
+    if (northData.length > 0) {
+      const northLayout = squarify(northData, northContainer);
+      for (const rect of northLayout) {
+        const depth = rect.depth || 0;
+        districts.push({
+          directory: rect.directory,
+          x0: rect.x0 + this.padding,
+          y0: rect.y0 + this.padding,
+          x1: rect.x1 - this.padding,
+          y1: rect.y1 - this.padding,
+          depth,
+          color: DISTRICT_COLORS[Math.min(depth, DISTRICT_COLORS.length - 1)],
+          files: rect.files || []
+        });
+      }
+    }
+    
+    if (southData.length > 0) {
+      const southLayout = squarify(southData, southContainer);
+      for (const rect of southLayout) {
+        const depth = rect.depth || 0;
+        districts.push({
+          directory: rect.directory,
+          x0: rect.x0 + this.padding,
+          y0: rect.y0 + this.padding,
+          x1: rect.x1 - this.padding,
+          y1: rect.y1 - this.padding,
+          depth,
+          color: DISTRICT_COLORS[Math.min(depth, DISTRICT_COLORS.length - 1)],
+          files: rect.files || []
+        });
+      }
     }
     
     return districts;
