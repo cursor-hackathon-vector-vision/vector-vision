@@ -108,17 +108,11 @@ export class GrowingCityEngine {
   }
   
   private createMainRoad(length: number): GrowingRoad {
-    // Slightly curved main road for organic feel
-    const points: THREE.Vector2[] = [];
-    const segments = 20;
-    
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      const x = -length / 2 + t * length;
-      // Gentle S-curve
-      const z = Math.sin(t * Math.PI * 2) * 5;
-      points.push(new THREE.Vector2(x, z));
-    }
+    // STRAIGHT main road - makes branch connections cleaner
+    const points: THREE.Vector2[] = [
+      new THREE.Vector2(-length / 2, 0),
+      new THREE.Vector2(length / 2, 0)
+    ];
     
     return {
       points,
@@ -135,25 +129,20 @@ export class GrowingCityEngine {
     dirName: string,
     fileCount: number
   ): GrowingRoad {
-    const branchLength = 15 + fileCount * 6;
-    const points: THREE.Vector2[] = [];
+    const branchLength = 20 + fileCount * 5;
     
-    // Start from main road
-    const startZ = side * 8; // Start slightly off main road
+    // SIMPLE STRAIGHT branch road perpendicular to main
+    const startZ = side * 8; // Start at edge of main road
+    const endZ = startZ + branchLength * side;
     
-    // Curved branch
-    const segments = 10;
-    for (let i = 0; i <= segments; i++) {
-      const t = i / segments;
-      // Slight curve away from main road
-      const x = startX + Math.sin(t * Math.PI * 0.3) * 8 * side * 0.3;
-      const z = startZ + t * branchLength * side;
-      points.push(new THREE.Vector2(x, z));
-    }
+    const points: THREE.Vector2[] = [
+      new THREE.Vector2(startX, startZ),
+      new THREE.Vector2(startX, endZ)
+    ];
     
     return {
       points,
-      width: 10,
+      width: 8, // Narrower than main road
       type: 'branch',
       name: this.getShortName(dirName),
       growDelay: 0.2,
@@ -383,12 +372,10 @@ function createRoadSegment(
   const midX = (start.x + end.x) / 2;
   const midZ = (start.y + end.y) / 2;
   
-  const sidewalkWidth = 2.5;
-  
   // Road surface
   const roadGeom = new THREE.PlaneGeometry(length + 0.5, width);
   const roadMat = new THREE.MeshStandardMaterial({
-    color: 0x2a2a3a,
+    color: isMain ? 0x2a2a3a : 0x252530,
     roughness: 0.9,
   });
   const roadMesh = new THREE.Mesh(roadGeom, roadMat);
@@ -397,9 +384,9 @@ function createRoadSegment(
   roadMesh.position.set(midX, 0.02, midZ);
   group.add(roadMesh);
   
-  // Dashed center line
-  const dashLength = 3;
-  const gapLength = 2;
+  // Dashed center line (main road only, or simpler for branches)
+  const dashLength = isMain ? 3 : 2;
+  const gapLength = isMain ? 2 : 2;
   const numDashes = Math.floor(length / (dashLength + gapLength));
   
   for (let i = 0; i < numDashes; i++) {
@@ -407,11 +394,11 @@ function createRoadSegment(
     const dashX = start.x + (end.x - start.x) * t;
     const dashZ = start.y + (end.y - start.y) * t;
     
-    const dashGeom = new THREE.PlaneGeometry(dashLength, isMain ? 0.4 : 0.3);
+    const dashGeom = new THREE.PlaneGeometry(dashLength, isMain ? 0.4 : 0.25);
     const dashMat = new THREE.MeshBasicMaterial({
-      color: 0xffdd00,
+      color: isMain ? 0xffdd00 : 0xcccc00,
       transparent: true,
-      opacity: 0.9,
+      opacity: isMain ? 0.9 : 0.6,
     });
     const dash = new THREE.Mesh(dashGeom, dashMat);
     dash.rotation.x = -Math.PI / 2;
@@ -420,13 +407,13 @@ function createRoadSegment(
     group.add(dash);
   }
   
-  // Edge lines
+  // Edge lines (main road: white, branch: subtle)
   for (const side of [-1, 1]) {
-    const edgeGeom = new THREE.PlaneGeometry(length + 0.5, 0.2);
+    const edgeGeom = new THREE.PlaneGeometry(length + 0.5, isMain ? 0.2 : 0.15);
     const edgeMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
+      color: isMain ? 0xffffff : 0x888888,
       transparent: true,
-      opacity: 0.7,
+      opacity: isMain ? 0.7 : 0.4,
     });
     const edge = new THREE.Mesh(edgeGeom, edgeMat);
     edge.rotation.x = -Math.PI / 2;
@@ -438,11 +425,13 @@ function createRoadSegment(
     group.add(edge);
   }
   
-  // Sidewalks
+  // Sidewalks - main road has wider sidewalks
+  const sidewalkWidth = isMain ? 2.5 : 1.5;
+  
   for (const side of [-1, 1]) {
     const walkGeom = new THREE.PlaneGeometry(length + 0.5, sidewalkWidth);
     const walkMat = new THREE.MeshStandardMaterial({
-      color: 0x5a5a6a,
+      color: isMain ? 0x5a5a6a : 0x4a4a5a,
       roughness: 0.7,
     });
     const walk = new THREE.Mesh(walkGeom, walkMat);
@@ -456,22 +445,24 @@ function createRoadSegment(
     walk.userData = { isSidewalk: true };
     group.add(walk);
     
-    // Curb glow
-    const curbGeom = new THREE.PlaneGeometry(length + 0.5, 0.15);
-    const curbMat = new THREE.MeshBasicMaterial({
-      color: 0x00ffff,
-      transparent: true,
-      opacity: 0.4,
-    });
-    const curb = new THREE.Mesh(curbGeom, curbMat);
-    curb.rotation.x = -Math.PI / 2;
-    curb.rotation.z = -angle;
-    
-    const curbOffset = width / 2 + 0.1;
-    const curbPerpX = Math.sin(angle) * curbOffset * side;
-    const curbPerpZ = -Math.cos(angle) * curbOffset * side;
-    curb.position.set(midX + curbPerpX, 0.025, midZ + curbPerpZ);
-    group.add(curb);
+    // Curb glow - only for main road
+    if (isMain) {
+      const curbGeom = new THREE.PlaneGeometry(length + 0.5, 0.15);
+      const curbMat = new THREE.MeshBasicMaterial({
+        color: 0x00ffff,
+        transparent: true,
+        opacity: 0.4,
+      });
+      const curb = new THREE.Mesh(curbGeom, curbMat);
+      curb.rotation.x = -Math.PI / 2;
+      curb.rotation.z = -angle;
+      
+      const curbOffset = width / 2 + 0.1;
+      const curbPerpX = Math.sin(angle) * curbOffset * side;
+      const curbPerpZ = -Math.cos(angle) * curbOffset * side;
+      curb.position.set(midX + curbPerpX, 0.025, midZ + curbPerpZ);
+      group.add(curb);
+    }
   }
   
   return group;
