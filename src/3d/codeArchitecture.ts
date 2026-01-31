@@ -108,19 +108,23 @@ export class CodeArchitecture {
   private layoutEngine: AdvancedLayoutEngine;
   private districts: THREE.Group[] = [];
   private connectionArcs: THREE.Group[] = [];
+  private layoutStreets: THREE.Mesh[] = [];
   private districtGroup: THREE.Group;
+  private streetGroup: THREE.Group;
   
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     
-    // Initialize advanced layout engine
-    this.layoutEngine = new AdvancedLayoutEngine(250, 250, 3);
+    // Initialize advanced layout engine - size matches ground plane
+    this.layoutEngine = new AdvancedLayoutEngine(400, 400, 4);
     
     // Create groups
     this.groundGroup = new THREE.Group();
     this.groundGroup.name = 'ground';
     this.districtGroup = new THREE.Group();
     this.districtGroup.name = 'districts';
+    this.streetGroup = new THREE.Group();
+    this.streetGroup.name = 'streets';
     this.buildingGroup = new THREE.Group();
     this.buildingGroup.name = 'buildings';
     this.connectionGroup = new THREE.Group();
@@ -130,6 +134,7 @@ export class CodeArchitecture {
     
     scene.add(this.groundGroup);
     scene.add(this.districtGroup);
+    scene.add(this.streetGroup);
     scene.add(this.connectionGroup);
     scene.add(this.buildingGroup);
     scene.add(this.effectsGroup);
@@ -188,8 +193,8 @@ export class CodeArchitecture {
   }
   
   private createFuturisticGround(): void {
-    // Main ground plane - dark with slight glow
-    const groundSize = 300;
+    // Main ground plane - dark with slight glow - larger to cover all districts
+    const groundSize = 500;
     const groundGeometry = new THREE.PlaneGeometry(groundSize, groundSize, 100, 100);
     
     // Create ground texture with grid pattern
@@ -230,21 +235,19 @@ export class CodeArchitecture {
     
     this.ground = new THREE.Mesh(groundGeometry, groundMaterial);
     this.ground.rotation.x = -Math.PI / 2;
-    this.ground.position.y = -0.05;
+    this.ground.position.y = -0.1;
     this.ground.receiveShadow = true;
     this.groundGroup.add(this.ground);
     
-    // Create main "highway" - the main branch
-    this.createMainStreet();
+    // NOTE: Streets are now created by AdvancedLayoutEngine in updateFromSnapshot()
+    // Old street system disabled to prevent duplicates
     
-    // Create branch roads
-    this.createBranchRoads();
-    
-    // Add street lights
+    // Add street lights along where the main street will be
     this.createStreetLights();
   }
   
-  private createMainStreet(): void {
+  // @ts-ignore - Deprecated: Streets now created by AdvancedLayoutEngine
+  private _legacyCreateMainStreet(): void {
     // Main highway running through the center (Git Main Branch)
     const streetWidth = 8;
     const streetLength = 250;
@@ -325,7 +328,8 @@ export class CodeArchitecture {
     this.groundGroup.add(label);
   }
   
-  private createBranchRoads(): void {
+  // @ts-ignore - Deprecated: Streets now created by AdvancedLayoutEngine
+  private _legacyCreateBranchRoads(): void {
     // Create branch roads that EMERGE FROM UNDER the main street
     const branches = [
       { name: 'src', side: 1, color: 0x4fc3f7, startZ: -60 },
@@ -1069,10 +1073,12 @@ export class CodeArchitecture {
       this.districts.push(districtMesh);
     }
     
-    // Create streets
+    // Clear and recreate streets
+    this.clearLayoutStreets();
     for (const street of advancedLayout.streets) {
       const streetMesh = createStreetMesh(street);
-      this.groundGroup.add(streetMesh);
+      this.streetGroup.add(streetMesh);
+      this.layoutStreets.push(streetMesh);
     }
     
     // Create position lookup
@@ -1799,6 +1805,17 @@ export class CodeArchitecture {
       });
     }
     this.connectionArcs = [];
+  }
+  
+  private clearLayoutStreets(): void {
+    for (const street of this.layoutStreets) {
+      this.streetGroup.remove(street);
+      street.geometry.dispose();
+      if (street.material instanceof THREE.Material) {
+        street.material.dispose();
+      }
+    }
+    this.layoutStreets = [];
   }
   
   private removeBuilding(building: CodeBuilding): void {
