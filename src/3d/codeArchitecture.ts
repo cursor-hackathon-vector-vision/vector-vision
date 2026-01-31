@@ -1,9 +1,6 @@
 import * as THREE from 'three';
 import type { ProjectSnapshot, FileNode, ChatMessage } from '../types';
 import { 
-  AdvancedLayoutEngine, 
-  createDistrictMesh, 
-  createConnectionArc,
   updateConnectionArcs
 } from './advancedLayout';
 import {
@@ -12,11 +9,10 @@ import {
   type StreetNetwork
 } from './streetSystem';
 import {
-  SemanticLayoutEngine,
-  createChatTree,
-  createBranchRoad,
-  type ChatEntry
-} from './semanticLayout';
+  SimpleLayoutEngine,
+  createDirectoryLabel,
+  type SimpleChatEntry
+} from './simpleLayout';
 
 /**
  * LIVING CODE ARCHITECTURE
@@ -114,30 +110,23 @@ export class CodeArchitecture {
   // Ground plane
   private ground: THREE.Mesh | null = null;
   
-  // Advanced layout system
-  private layoutEngine: AdvancedLayoutEngine;
-  private semanticEngine: SemanticLayoutEngine;
-  private districts: THREE.Group[] = [];
+  // Simple layout system
+  private simpleLayoutEngine: SimpleLayoutEngine;
   private connectionArcs: THREE.Group[] = [];
-  private layoutStreets: THREE.Mesh[] = [];
   private streetNetwork: StreetNetwork | null = null;
   private chatTrees: THREE.Group[] = [];
-  private branchRoads: THREE.Group[] = [];
-  private districtGroup: THREE.Group;
+  private directoryLabels: THREE.Sprite[] = [];
   private streetGroup: THREE.Group;
   
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     
-    // Initialize layout engines
-    this.layoutEngine = new AdvancedLayoutEngine(400, 400, 4);
-    this.semanticEngine = new SemanticLayoutEngine(400);
+    // Initialize simple layout engine
+    this.simpleLayoutEngine = new SimpleLayoutEngine(300);
     
     // Create groups
     this.groundGroup = new THREE.Group();
     this.groundGroup.name = 'ground';
-    this.districtGroup = new THREE.Group();
-    this.districtGroup.name = 'districts';
     this.streetGroup = new THREE.Group();
     this.streetGroup.name = 'streets';
     this.buildingGroup = new THREE.Group();
@@ -148,7 +137,6 @@ export class CodeArchitecture {
     this.effectsGroup.name = 'effects';
     
     scene.add(this.groundGroup);
-    scene.add(this.districtGroup);
     scene.add(this.streetGroup);
     scene.add(this.connectionGroup);
     scene.add(this.buildingGroup);
@@ -1071,94 +1059,52 @@ export class CodeArchitecture {
       }
     }
     
-    // Use advanced layout engine
-    const fileData = snapshot.files.map(f => ({
+    // === SIMPLE LAYOUT ===
+    
+    // Prepare file data
+    const simpleFileData = snapshot.files.map(f => ({
       path: f.path,
       name: f.name,
       directory: f.directory || '/',
       extension: f.extension,
-      linesOfCode: f.linesOfCode,
-      imports: fileContents?.[f.path]?.imports || [],
+      linesOfCode: f.linesOfCode
     }));
     
-    const advancedLayout = this.layoutEngine.calculateLayout(fileData);
-    
-    // Clear and recreate districts
-    this.clearDistricts();
-    for (const district of advancedLayout.districts) {
-      const districtMesh = createDistrictMesh(district);
-      this.districtGroup.add(districtMesh);
-      this.districts.push(districtMesh);
-    }
-    
-    // Clear old streets and create new street network
-    this.clearLayoutStreets();
-    this.clearStreetNetwork();
-    
-    // Create new advanced street network
-    const districtBounds = advancedLayout.districts.map(d => ({
-      x0: d.x0,
-      y0: d.y0,
-      x1: d.x1,
-      y1: d.y1,
-      name: d.directory,
-      color: d.color
-    }));
-    
-    this.streetNetwork = createStreetNetwork(districtBounds, 400, 400);
-    addStreetNetworkToScene(this.streetNetwork, this.streetGroup, this.effectsGroup);
-    
-    // === SEMANTIC LAYOUT: Chat Trees & Branch Roads ===
-    
-    // Convert chats to ChatEntry format (convert Date to number)
-    const chatEntries: ChatEntry[] = snapshot.chats.map(chat => ({
+    // Prepare chat data
+    const simpleChatData: SimpleChatEntry[] = snapshot.chats.map(chat => ({
       role: chat.role as 'user' | 'assistant' | 'tool',
       content: chat.content,
-      timestamp: chat.timestamp instanceof Date ? chat.timestamp.getTime() : Date.now(),
-      relatedFiles: chat.relatedFiles
+      timestamp: chat.timestamp instanceof Date ? chat.timestamp.getTime() : Date.now()
     }));
     
-    // Calculate semantic layout (convert Date to number)
-    const semanticFileData = snapshot.files.map(f => ({
-      path: f.path,
-      name: f.name,
-      directory: f.directory || '/',
-      extension: f.extension,
-      linesOfCode: f.linesOfCode,
-      imports: fileContents?.[f.path]?.imports || [],
-      createdAt: f.createdAt instanceof Date ? f.createdAt.getTime() : undefined,
-      modifiedAt: f.modifiedAt instanceof Date ? f.modifiedAt.getTime() : undefined
-    }));
+    // Calculate simple layout
+    const layout = this.simpleLayoutEngine.calculateLayout(simpleFileData, simpleChatData);
     
-    const semanticLayout = this.semanticEngine.calculateLayout(semanticFileData, chatEntries);
+    // Clear and recreate street network (just main road)
+    this.clearStreetNetwork();
+    this.streetNetwork = createStreetNetwork([], 300, 300);
+    addStreetNetworkToScene(this.streetNetwork, this.streetGroup, this.effectsGroup);
     
-    // Clear old chat trees and branch roads
+    // Clear and create chat trees
     this.clearChatTrees();
-    this.clearBranchRoads();
-    
-    // Create chat trees (each chat = a tree along the road)
-    for (const treePos of semanticLayout.chatTrees) {
-      const tree = createChatTree(
-        treePos,
-        () => this.createPineTreeMesh(),
-        () => this.createRoundTreeMesh(),
-        () => this.createCyberTreeMesh()
-      );
+    for (const treePos of layout.chatTrees) {
+      const tree = this.createChatTreeMesh(treePos);
       this.streetGroup.add(tree);
       this.chatTrees.push(tree);
     }
     
-    // Create branch roads for directories
-    for (const branch of semanticLayout.branches) {
-      const branchRoad = createBranchRoad(branch);
-      this.streetGroup.add(branchRoad);
-      this.branchRoads.push(branchRoad);
+    // Clear and create directory labels
+    this.clearDirectoryLabels();
+    for (const label of layout.directoryLabels) {
+      const labelSprite = createDirectoryLabel(label);
+      this.streetGroup.add(labelSprite);
+      this.directoryLabels.push(labelSprite);
     }
     
-    // Create position lookup
+    // Create position lookup from simple layout
     const positionMap = new Map<string, THREE.Vector3>();
-    for (const pos of advancedLayout.buildings) {
-      positionMap.set(pos.path, new THREE.Vector3(pos.x, 0, pos.z));
+    for (const pos of layout.buildings) {
+      positionMap.set(pos.file.path, new THREE.Vector3(pos.x, 0, pos.z));
     }
     
     // Create or update buildings
@@ -1181,13 +1127,8 @@ export class CodeArchitecture {
       }
     }
     
-    // Create connection arcs
+    // Clear connection arcs (simplified - no complex arcs for now)
     this.clearConnectionArcs();
-    for (const arc of advancedLayout.connections) {
-      const arcGroup = createConnectionArc(arc);
-      this.connectionGroup.add(arcGroup);
-      this.connectionArcs.push(arcGroup);
-    }
     
     // Update connections based on imports (legacy)
     this.updateConnections(fileContents);
@@ -1851,21 +1792,6 @@ export class CodeArchitecture {
     }
   }
   
-  private clearDistricts(): void {
-    for (const district of this.districts) {
-      this.districtGroup.remove(district);
-      district.traverse((child) => {
-        if (child instanceof THREE.Mesh) {
-          child.geometry.dispose();
-          if (child.material instanceof THREE.Material) {
-            child.material.dispose();
-          }
-        }
-      });
-    }
-    this.districts = [];
-  }
-  
   private clearConnectionArcs(): void {
     for (const arc of this.connectionArcs) {
       this.connectionGroup.remove(arc);
@@ -1879,17 +1805,6 @@ export class CodeArchitecture {
       });
     }
     this.connectionArcs = [];
-  }
-  
-  private clearLayoutStreets(): void {
-    for (const street of this.layoutStreets) {
-      this.streetGroup.remove(street);
-      street.geometry.dispose();
-      if (street.material instanceof THREE.Material) {
-        street.material.dispose();
-      }
-    }
-    this.layoutStreets = [];
   }
   
   private clearStreetNetwork(): void {
@@ -1946,24 +1861,41 @@ export class CodeArchitecture {
     this.chatTrees = [];
   }
   
-  private clearBranchRoads(): void {
-    for (const road of this.branchRoads) {
-      this.streetGroup.remove(road);
-      road.traverse((child) => {
-        if (child instanceof THREE.Mesh || child instanceof THREE.Sprite) {
-          if (child instanceof THREE.Mesh) {
-            child.geometry.dispose();
-          }
-          if (child.material instanceof THREE.Material) {
-            child.material.dispose();
-          }
-        }
-      });
+  private clearDirectoryLabels(): void {
+    for (const label of this.directoryLabels) {
+      this.streetGroup.remove(label);
+      if (label.material instanceof THREE.SpriteMaterial) {
+        label.material.map?.dispose();
+        label.material.dispose();
+      }
     }
-    this.branchRoads = [];
+    this.directoryLabels = [];
   }
   
-  // Tree factory methods for semantic layout
+  // Create chat tree based on position data
+  private createChatTreeMesh(pos: { chat: SimpleChatEntry; x: number; z: number; treeType: 'pine' | 'round' | 'cyber'; scale: number }): THREE.Group {
+    let tree: THREE.Group;
+    
+    switch (pos.treeType) {
+      case 'pine':
+        tree = this.createPineTreeMesh();
+        break;
+      case 'round':
+        tree = this.createRoundTreeMesh();
+        break;
+      case 'cyber':
+        tree = this.createCyberTreeMesh();
+        break;
+    }
+    
+    tree.scale.setScalar(pos.scale);
+    tree.position.set(pos.x, 0, pos.z);
+    tree.userData = { isChatTree: true, chat: pos.chat };
+    
+    return tree;
+  }
+  
+  // Tree factory methods
   private createPineTreeMesh(): THREE.Group {
     const group = new THREE.Group();
     
