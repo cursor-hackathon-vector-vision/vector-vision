@@ -166,9 +166,13 @@ export class GrowingCityEngine {
       const pos = this.getPointOnRoad(road.points, t);
       const tangent = this.getTangentOnRoad(road.points, t);
       
-      // Offset to side of road - tighter spacing
+      // Calculate building size to determine proper offset
+      const buildingSize = this.estimateBuildingSize(file);
+      
+      // Offset = road edge + building half-size + gap
       const perpendicular = new THREE.Vector2(-tangent.y, tangent.x);
-      const offset = (road.width / 2 + 3) * (i % 2 === 0 ? 1 : -1);
+      const gap = 1.5; // Space between road and building
+      const offset = (road.width / 2 + buildingSize / 2 + gap) * (i % 2 === 0 ? 1 : -1);
       
       const buildingX = pos.x + perpendicular.x * offset;
       const buildingZ = pos.y + perpendicular.y * offset;
@@ -184,6 +188,33 @@ export class GrowingCityEngine {
         delay: t * 0.5, // Staggered appearance
       });
     });
+  }
+  
+  /**
+   * Estimate building base plate size based on file metrics
+   * Matches logic in codeArchitecture.ts calculateBuildingDimensions
+   */
+  private estimateBuildingSize(file: GrowingFileData): number {
+    const loc = file.linesOfCode || 10;
+    
+    // Width calculation (simplified from codeArchitecture)
+    let width: number;
+    if (loc <= 200) {
+      width = 1.5;
+    } else if (loc <= 1000) {
+      width = 2 + (loc - 200) * 0.003;
+    } else {
+      width = 4 + Math.sqrt(loc - 1000) * 0.1;
+    }
+    width = Math.max(1.2, Math.min(8, width));
+    
+    // Depth is similar to width
+    const depth = Math.max(1.2, width * 0.8);
+    
+    // Plot size: Area reserved for building + buffer
+    const plotSize = Math.max(width, depth) * 1.5 + 1;
+    
+    return plotSize;
   }
   
   private addMainRoadDecorations(road: GrowingRoad, decorations: GrowingDecoration[]): void {
