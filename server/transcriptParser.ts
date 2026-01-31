@@ -188,6 +188,7 @@ function extractUserQuery(block: string): string {
 
 /**
  * Extract assistant content, thinking, and tool calls
+ * IMPROVED: Better extraction of actual visible assistant text
  */
 function extractAssistantContent(block: string): {
   content: string;
@@ -197,8 +198,8 @@ function extractAssistantContent(block: string): {
   let thinking: string | undefined;
   const toolCalls: ToolCall[] = [];
   
-  // Extract thinking blocks
-  const thinkingMatch = block.match(/\[Thinking\]([\s\S]*?)(?=\[Tool call\]|\[Tool result\]|$)/i);
+  // Extract thinking blocks (between [Thinking] and next bracket or end of section)
+  const thinkingMatch = block.match(/\[Thinking\]([\s\S]*?)(?=\[Tool call\]|\[Tool result\]|\n[A-Z]|$)/i);
   if (thinkingMatch) {
     thinking = thinkingMatch[1].trim().slice(0, 500);
   }
@@ -212,17 +213,45 @@ function extractAssistantContent(block: string): {
     });
   }
   
-  // Extract main content (text that's not thinking or tool calls)
-  let content = block
-    .replace(/^A:\s*/i, '')
-    .replace(/\[Thinking\][\s\S]*?(?=\[Tool call\]|\[Tool result\]|[A-Z]|$)/gi, '')
-    .replace(/\[Tool call\][\s\S]*?(?=\[Tool result\]|\[Tool call\]|$)/gi, '')
-    .replace(/\[Tool result\][\s\S]*?(?=\[Tool call\]|A:|user:|$)/gi, '')
-    .trim();
+  // IMPROVED: Extract the VISIBLE assistant text
+  // This is the text that appears AFTER tool results, not in brackets
+  let content = '';
   
-  // Take only the meaningful text (first paragraph or so)
-  const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('['));
-  content = lines.slice(0, 5).join(' ').trim().slice(0, 1000);
+  // Split by newlines and find lines that are NOT tool-related
+  const lines = block.split('\n');
+  const contentLines: string[] = [];
+  let inToolSection = false;
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    
+    // Skip header and tool markers
+    if (trimmed.startsWith('A:')) continue;
+    if (trimmed.startsWith('[Thinking]')) { inToolSection = true; continue; }
+    if (trimmed.startsWith('[Tool call]')) { inToolSection = true; continue; }
+    if (trimmed.startsWith('[Tool result]')) { inToolSection = true; continue; }
+    
+    // End of tool section when we see actual content (not empty, not starting with bracket)
+    if (inToolSection && trimmed && !trimmed.startsWith('[')) {
+      inToolSection = false;
+    }
+    
+    // Collect non-tool content
+    if (!inToolSection && trimmed && !trimmed.startsWith('[')) {
+      contentLines.push(trimmed);
+    }
+  }
+  
+  // Join the actual visible content
+  content = contentLines.slice(0, 10).join(' ').trim().slice(0, 1000);
+  
+  // Fallback: if no content found, use first non-empty line after A:
+  if (!content) {
+    const firstLine = block.replace(/^A:\s*/i, '').split('\n').find(l => 
+      l.trim() && !l.trim().startsWith('[')
+    );
+    content = firstLine?.trim().slice(0, 1000) || '[Tool operations]';
+  }
   
   return { content, thinking, toolCalls };
 }

@@ -32,6 +32,7 @@ export interface MessageTimelineLayout {
   timeline: TimelineElement[];
   districts: District[];
   animals: AnimalSpawn[];
+  mainRoad: DistrictStreet; // The main highway running South→North
 }
 
 export interface TimelineElement {
@@ -89,11 +90,22 @@ export interface AnimalSpawn {
 
 /**
  * Message Timeline Layout Engine
+ * 
+ * NEW LAYOUT:
+ * - Main road runs SOUTH to NORTH (along -Z axis, so Z decreases = going north)
+ * - Districts branch off to the LEFT (West, -X) and RIGHT (East, +X)
+ * - Each district = one top-level folder
+ * - Side streets connect main road to districts
+ * - Buildings line up along the side streets
  */
 export class MessageTimelineEngine {
   private timelineLength: number = 0;
   private timeSpan: number = 0;
-  private timelineStart: THREE.Vector3 = new THREE.Vector3(-100, 0, 0);
+  
+  // MAIN ROAD: Süd → Nord (positive Z = south, negative Z = north)
+  // Start at south end (positive Z), go north (negative Z)
+  private mainRoadSouth: THREE.Vector3 = new THREE.Vector3(0, 0, 200);  // SOUTH START
+  private mainRoadNorth: THREE.Vector3 = new THREE.Vector3(0, 0, -200); // NORTH END
   
   public calculateLayout(
     messages: MessageData[],
@@ -103,41 +115,71 @@ export class MessageTimelineEngine {
     const sortedMessages = [...messages].sort((a, b) => a.timestamp - b.timestamp);
     const sortedFiles = [...files].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
     
+    // Default main road (even if no messages)
+    const MAIN_ROAD_WIDTH = 16; // 4 lanes + sidewalks
+    
     if (sortedMessages.length === 0) {
-      return { timeline: [], districts: [], animals: [] };
+      // Even with no messages, create a long highway
+      const defaultMainRoad: DistrictStreet = {
+        points: [
+          new THREE.Vector3(0, 0, 500),   // SOUTH (far)
+          new THREE.Vector3(0, 0, -500)   // NORTH (far)
+        ],
+        width: MAIN_ROAD_WIDTH,
+        type: 'main'
+      };
+      return { timeline: [], districts: [], animals: [], mainRoad: defaultMainRoad };
     }
     
     // Calculate time span and timeline length
     this.timeSpan = sortedMessages[sortedMessages.length - 1].timestamp - sortedMessages[0].timestamp;
-    this.timelineLength = Math.max(200, sortedMessages.length * 15);
+    this.timelineLength = Math.max(300, sortedMessages.length * 10);
     
-    // Generate timeline elements (messages + trees)
+    // === HAUPTSTRASSE: VERY LONG (into "infinity") ===
+    // Road extends far beyond the content for visual effect
+    const ROAD_EXTENSION = 500; // Extra length on each end
+    this.mainRoadSouth = new THREE.Vector3(0, 0, this.timelineLength / 2 + ROAD_EXTENSION);
+    this.mainRoadNorth = new THREE.Vector3(0, 0, -this.timelineLength / 2 - ROAD_EXTENSION);
+    
+    // Create main road (the highway running South→North along Z-axis)
+    const mainRoad: DistrictStreet = {
+      points: [this.mainRoadSouth.clone(), this.mainRoadNorth.clone()],
+      width: MAIN_ROAD_WIDTH,
+      type: 'main'
+    };
+    
+    // Generate timeline elements (messages along main road)
     const timeline = this.createTimeline(sortedMessages);
     
-    // Group files by directory and create districts
+    // Group files by directory and create districts (side streets)
     const districts = this.createDistricts(sortedFiles, sortedMessages);
     
     // Generate animal paths
     const animals = this.createAnimalPaths(timeline, districts);
     
-    return { timeline, districts, animals };
+    return { timeline, districts, animals, mainRoad };
   }
   
   /**
-   * Create timeline with messages and token-cost trees
+   * Create timeline with messages along the MAIN ROAD (Süd→Nord)
+   * Messages are placed along the Z-axis
    */
   private createTimeline(messages: MessageData[]): TimelineElement[] {
     const elements: TimelineElement[] = [];
     const firstTime = messages[0].timestamp;
     
     messages.forEach((msg, index) => {
-      // Calculate position along timeline
+      // Calculate position along timeline (Z axis, from south to north)
       const progress = this.timeSpan > 0 
         ? (msg.timestamp - firstTime) / this.timeSpan 
         : index / messages.length;
       
-      const x = this.timelineStart.x + progress * this.timelineLength;
-      const position = new THREE.Vector3(x, 0, 0);
+      // Z goes from +timelineLength/2 (south) to -timelineLength/2 (north)
+      const z = this.mainRoadSouth.z - progress * this.timelineLength;
+      
+      // User messages on WEST side (-X), Assistant on EAST side (+X)
+      const laneOffset = msg.role === 'user' ? -3 : 3;
+      const position = new THREE.Vector3(laneOffset, 0, z);
       
       // Add message marker
       elements.push({
@@ -147,14 +189,14 @@ export class MessageTimelineEngine {
         delay: progress,
       });
       
-      // Add token-cost tree for assistant messages
+      // Add token-cost tree for assistant messages (outside the lanes)
       if (msg.role === 'assistant' && msg.tokenCost) {
         const treeSize = this.calculateTreeSize(msg.tokenCost);
         const treeSide = index % 2 === 0 ? 1 : -1;
-        const treeOffset = 8 + Math.random() * 3;
+        const treeOffset = 12 + Math.random() * 3;
         
         const treePos = position.clone();
-        treePos.z += treeSide * treeOffset;
+        treePos.x = treeSide * treeOffset;
         
         elements.push({
           type: 'tree',
@@ -185,6 +227,12 @@ export class MessageTimelineEngine {
   
   /**
    * Create districts from file groups
+   * 
+   * ORIGINAL CONCEPT (from earlier versions):
+   * - Districts are DIRECTLY NEXT TO EACH OTHER along the main road
+   * - Each district = one folder = one short side street branching off
+   * - Buildings line up ALONG the side streets
+   * - Everything is TOGETHER, not scattered!
    */
   private createDistricts(
     files: FileData[],
@@ -194,10 +242,30 @@ export class MessageTimelineEngine {
     const dirGroups = this.groupByDirectory(files);
     const districts: District[] = [];
     
+    // === TIGHT SPACING - Districts directly next to each other! ===
+    const SIDE_STREET_SPACING = 30; // Distance between side streets along main road
+    const SIDE_STREET_LENGTH = 50;  // How far side streets extend from main road
+    
+    // Start position (centered around Z=0)
+    const totalLength = (dirGroups.size - 1) * SIDE_STREET_SPACING;
+    const startZ = totalLength / 2;
+    
     // Create district for each directory group
     let index = 0;
     dirGroups.forEach((dirFiles, dirName) => {
-      const district = this.createDistrict(dirName, dirFiles, index);
+      // Position along main road - tightly packed!
+      const positionAlongRoad = startZ - index * SIDE_STREET_SPACING;
+      
+      // Alternate sides: even = EAST (+X), odd = WEST (-X)
+      const side = index % 2 === 0 ? 1 : -1;
+      
+      const district = this.createTightDistrict(
+        dirName, 
+        dirFiles, 
+        positionAlongRoad, 
+        side, 
+        SIDE_STREET_LENGTH
+      );
       districts.push(district);
       index++;
     });
@@ -206,35 +274,38 @@ export class MessageTimelineEngine {
   }
   
   /**
-   * Create a single district (neighborhood) for a directory
+   * Create a TIGHT district - buildings directly along a short side street
+   * 
+   * Layout:
+   * - Short side street branches from main road
+   * - Buildings lined up along ONE side of the side street
+   * - Everything compact and together!
    */
-  private createDistrict(
+  private createTightDistrict(
     dirName: string,
     files: FileData[],
-    districtIndex: number
+    positionAlongRoad: number,
+    side: number,  // +1 = East, -1 = West
+    sideStreetLength: number
   ): District {
-    // Position districts around the timeline
-    const side = districtIndex % 2 === 0 ? 1 : -1;
-    const distanceFromTimeline = 25 + Math.floor(districtIndex / 2) * 30;
-    const alongTimeline = (districtIndex * 0.3) * this.timelineLength / Math.max(1, Math.floor(districtIndex / 2));
-    
+    // District center is at the END of the side street
     const center = new THREE.Vector3(
-      this.timelineStart.x + alongTimeline,
+      side * sideStreetLength,
       0,
-      side * distanceFromTimeline
+      positionAlongRoad
     );
     
-    // Calculate district radius based on file count
-    const radius = Math.max(15, Math.sqrt(files.length) * 3);
+    // Small radius - keep it tight!
+    const radius = Math.max(15, files.length * 2);
     
-    // Create blocks within district
-    const blocks = this.createBlocks(files, center, radius);
+    // Create blocks - buildings along the side street
+    const blocks = this.createBlocksAlongSideStreet(files, positionAlongRoad, side, sideStreetLength);
     
-    // Create internal street network
-    const streets = this.createDistrictStreets(center, radius, blocks);
+    // Create the ONE side street
+    const streets = this.createSingleSideStreet(positionAlongRoad, side, sideStreetLength);
     
-    // Add decorations (trees, lamps, parks)
-    const decorations = this.createDistrictDecorations(center, radius, blocks.length);
+    // Minimal decorations
+    const decorations = this.createMinimalDecorations(center, side);
     
     return {
       name: this.getShortName(dirName),
@@ -247,137 +318,160 @@ export class MessageTimelineEngine {
   }
   
   /**
-   * Group files into blocks (neighborhoods)
+   * Create blocks DIRECTLY ALONG the side street
+   * 
+   * Buildings in a LINE along the side street, on the NORTH side (negative Z offset)
+   */
+  private createBlocksAlongSideStreet(
+    files: FileData[],
+    streetZ: number,
+    side: number, // +1 = East, -1 = West
+    streetLength: number
+  ): Block[] {
+    const blocks: Block[] = [];
+    const BUILDING_SPACING = 6;
+    const NORTH_OFFSET = -8; // Buildings north of the side street
+    
+    // Buildings line up along the side street (X-axis direction)
+    files.forEach((file, index) => {
+      // X position: from main road outward along the side street
+      const distanceFromRoad = 15 + index * BUILDING_SPACING;
+      const x = side * distanceFromRoad;
+      
+      // Z position: north of the side street
+      const z = streetZ + NORTH_OFFSET;
+      
+      const position = new THREE.Vector3(x, 0, z);
+      
+      blocks.push({
+        position,
+        files: [file], // One file per block for tight layout
+        plotSize: 5,
+      });
+    });
+    
+    return blocks;
+  }
+  
+  /**
+   * Create a SINGLE side street from main road
+   */
+  private createSingleSideStreet(
+    streetZ: number,
+    side: number,
+    length: number
+  ): DistrictStreet[] {
+    const SIDE_ROAD_WIDTH = 8;
+    
+    // One straight side street from main road (X=0) outward
+    const start = new THREE.Vector3(0, 0, streetZ);
+    const end = new THREE.Vector3(side * length, 0, streetZ);
+    
+    return [{
+      points: [start, end],
+      width: SIDE_ROAD_WIDTH,
+      type: 'secondary',
+    }];
+  }
+  
+  /**
+   * Minimal decorations - just a few lamps along the side street
+   */
+  private createMinimalDecorations(
+    center: THREE.Vector3,
+    side: number
+  ): Decoration[] {
+    const decorations: Decoration[] = [];
+    
+    // A few lamps along the side street
+    for (let i = 0; i < 3; i++) {
+      const x = side * (15 + i * 15);
+      decorations.push({
+        type: 'lamp',
+        position: new THREE.Vector3(x, 0, center.z + 5), // South side of street
+        scale: 0.8,
+        delay: i * 0.1,
+      });
+    }
+    
+    return decorations;
+  }
+  
+  /**
+   * LEGACY: Create blocks along street - kept for compatibility
+   */
+  private createBlocksAlongStreet(
+    files: FileData[],
+    districtCenter: THREE.Vector3,
+    _districtRadius: number,
+    side: number
+  ): Block[] {
+    return this.createBlocksAlongSideStreet(files, districtCenter.z, side, 50);
+  }
+  
+  /**
+   * LEGACY: Group files into blocks - kept for compatibility
    */
   private createBlocks(
     files: FileData[],
     districtCenter: THREE.Vector3,
     districtRadius: number
   ): Block[] {
-    const blocks: Block[] = [];
-    const filesPerBlock = 4;
-    
-    // Group files into blocks
-    for (let i = 0; i < files.length; i += filesPerBlock) {
-      const blockFiles = files.slice(i, i + filesPerBlock);
-      
-      // Arrange blocks in a grid within the district
-      const blockIndex = Math.floor(i / filesPerBlock);
-      const blocksPerRow = Math.ceil(Math.sqrt(files.length / filesPerBlock));
-      const row = Math.floor(blockIndex / blocksPerRow);
-      const col = blockIndex % blocksPerRow;
-      
-      const spacing = (districtRadius * 1.5) / blocksPerRow;
-      const offsetX = (col - blocksPerRow / 2) * spacing;
-      const offsetZ = (row - blocksPerRow / 2) * spacing;
-      
-      const position = new THREE.Vector3(
-        districtCenter.x + offsetX,
-        0,
-        districtCenter.z + offsetZ
-      );
-      
-      const plotSize = Math.max(8, blockFiles.length * 2);
-      
-      blocks.push({
-        position,
-        files: blockFiles,
-        plotSize,
-      });
-    }
-    
-    return blocks;
+    return this.createBlocksAlongStreet(files, districtCenter, districtRadius, 1);
   }
   
   /**
-   * Create street network within district - GRID BASED, STRAIGHT ROADS ONLY
+   * Create SIDE STREET from main road to district
    * 
-   * Road dimensions (based on 3DStreet standards):
-   * - Main road: 4 lanes (12m) + 2×2m sidewalks = 16m total
-   * - Side road: 2 lanes (6m) + 2×2m sidewalks = 10m total  
-   * - Sub road: 1 lane (3m) + 2×2m sidewalks = 7m total
+   * Layout:
+   * - One main SIDE STREET goes from main road (X=0) to district
+   * - Buildings are along the NORTH side of this side street
+   * - The side street runs along the X-axis (West-East direction)
+   * 
+   * Road dimensions:
+   * - Main highway: 4 lanes + sidewalks = 16m
+   * - Side street: 2 lanes + sidewalks = 10m
+   */
+  private createSideStreetWithBranches(
+    districtCenter: THREE.Vector3,
+    radius: number,
+    side: number, // -1 = West, +1 = East
+    mainRoadZ: number,
+    sideStreetLength: number,
+    blocks: Block[]
+  ): DistrictStreet[] {
+    const streets: DistrictStreet[] = [];
+    
+    const SIDE_ROAD_WIDTH = 10;    // 2 lanes (6m) + 2×2m sidewalks
+    
+    // === ONLY ONE SIDE STREET per district ===
+    // From main road (X=0) to the district area
+    // Runs along X-axis (EAST-WEST) at the district's Z position
+    const sideStreetStart = new THREE.Vector3(0, 0, mainRoadZ);
+    const sideStreetEnd = new THREE.Vector3(side * sideStreetLength, 0, mainRoadZ);
+    
+    streets.push({
+      points: [sideStreetStart, sideStreetEnd],
+      width: SIDE_ROAD_WIDTH,
+      type: 'secondary',
+    });
+    
+    // NO SUB-STREETS - they were causing the extra Süd-Nord roads!
+    // Buildings are placed directly along the side street
+    
+    return streets;
+  }
+  
+  /**
+   * LEGACY: Create street network within district - kept for compatibility
    */
   private createDistrictStreets(
     center: THREE.Vector3,
     radius: number,
     blocks: Block[]
   ): DistrictStreet[] {
-    const streets: DistrictStreet[] = [];
-    
-    // STREET WIDTHS (road + sidewalks on both sides)
-    const MAIN_ROAD_WIDTH = 16;    // 4 lanes (12m) + 2×2m sidewalks
-    const SIDE_ROAD_WIDTH = 10;    // 2 lanes (6m) + 2×2m sidewalks
-    const SUB_ROAD_WIDTH = 7;      // 1 lane (3m) + 2×2m sidewalks
-    
-    // Main straight road through district center (horizontal)
-    const mainRoadStart = new THREE.Vector3(center.x - radius, 0, center.z);
-    const mainRoadEnd = new THREE.Vector3(center.x + radius, 0, center.z);
-    streets.push({
-      points: [mainRoadStart, mainRoadEnd],
-      width: MAIN_ROAD_WIDTH,
-      type: 'main',
-    });
-    
-    // Cross road (vertical through center)
-    const crossRoadStart = new THREE.Vector3(center.x, 0, center.z - radius);
-    const crossRoadEnd = new THREE.Vector3(center.x, 0, center.z + radius);
-    streets.push({
-      points: [crossRoadStart, crossRoadEnd],
-      width: MAIN_ROAD_WIDTH,
-      type: 'main',
-    });
-    
-    // Side roads to blocks (straight lines from main road to block)
-    const blocksPerQuadrant = Math.ceil(blocks.length / 4);
-    
-    blocks.forEach((block, index) => {
-      // Determine which quadrant the block is in
-      const dx = block.position.x - center.x;
-      const dz = block.position.z - center.z;
-      
-      // Create a side road perpendicular to main roads
-      if (Math.abs(dx) > Math.abs(dz)) {
-        // Block is more horizontal - connect vertically from main road
-        const sideRoadStart = new THREE.Vector3(block.position.x, 0, center.z);
-        const sideRoadEnd = block.position.clone();
-        sideRoadEnd.y = 0;
-        streets.push({
-          points: [sideRoadStart, sideRoadEnd],
-          width: SIDE_ROAD_WIDTH,
-          type: 'secondary',
-        });
-      } else {
-        // Block is more vertical - connect horizontally from cross road
-        const sideRoadStart = new THREE.Vector3(center.x, 0, block.position.z);
-        const sideRoadEnd = block.position.clone();
-        sideRoadEnd.y = 0;
-        streets.push({
-          points: [sideRoadStart, sideRoadEnd],
-          width: SIDE_ROAD_WIDTH,
-          type: 'secondary',
-        });
-      }
-      
-      // Add sub-roads between nearby blocks (every other block)
-      if (index > 0 && index % 2 === 0) {
-        const prevBlock = blocks[index - 1];
-        const subRoadStart = prevBlock.position.clone();
-        const subRoadEnd = block.position.clone();
-        subRoadStart.y = 0;
-        subRoadEnd.y = 0;
-        
-        // Only add if blocks are reasonably close
-        if (subRoadStart.distanceTo(subRoadEnd) < radius) {
-          streets.push({
-            points: [subRoadStart, subRoadEnd],
-            width: SUB_ROAD_WIDTH,
-            type: 'tertiary',
-          });
-        }
-      }
-    });
-    
-    return streets;
+    // Delegate to new method with default values
+    return this.createSideStreetWithBranches(center, radius, 1, center.z, 40, blocks);
   }
   
   /**
@@ -441,6 +535,10 @@ export class MessageTimelineEngine {
   
   /**
    * Generate animal paths (sidewalks and sky)
+   * 
+   * Cats walk along:
+   * - Main road sidewalks (Z-axis, both sides)
+   * - Side street sidewalks
    */
   private createAnimalPaths(
     _timeline: TimelineElement[],
@@ -448,43 +546,47 @@ export class MessageTimelineEngine {
   ): AnimalSpawn[] {
     const spawns: AnimalSpawn[] = [];
     
-    // Cats walk along the main timeline road sidewalks
-    const mainRoadPath: THREE.Vector3[] = [];
-    const sidewalkOffset = 9;
+    // Cats walk along the MAIN ROAD sidewalks (Z-axis)
+    const mainRoadPathWest: THREE.Vector3[] = [];
+    const mainRoadPathEast: THREE.Vector3[] = [];
+    const sidewalkOffset = 10; // Distance from center
     
-    // Create path along timeline
+    // Create path along main road (Z-axis, south to north)
     for (let i = 0; i <= 50; i++) {
-      const x = this.timelineStart.x + (i / 50) * this.timelineLength;
-      mainRoadPath.push(new THREE.Vector3(x, 0, sidewalkOffset));
-      mainRoadPath.push(new THREE.Vector3(x, 0, -sidewalkOffset));
+      const z = this.mainRoadSouth.z - (i / 50) * this.timelineLength;
+      mainRoadPathWest.push(new THREE.Vector3(-sidewalkOffset, 0, z));
+      mainRoadPathEast.push(new THREE.Vector3(sidewalkOffset, 0, z));
     }
     
     spawns.push({
       type: 'cat',
-      path: mainRoadPath,
-      count: 20, // MANY cats!
+      path: mainRoadPathWest,
+      count: 15,
     });
     
-    // Cats also walk around districts
+    spawns.push({
+      type: 'cat',
+      path: mainRoadPathEast,
+      count: 15,
+    });
+    
+    // Cats also walk along district side streets
     districts.forEach(district => {
-      const districtPath = district.streets
-        .find(s => s.type === 'main')
-        ?.points || [];
+      const sideStreet = district.streets.find(s => s.type === 'secondary');
       
-      if (districtPath.length > 0) {
+      if (sideStreet && sideStreet.points.length >= 2) {
         spawns.push({
           type: 'cat',
-          path: districtPath,
-          count: 8,
+          path: sideStreet.points,
+          count: 5,
         });
       }
     });
     
     // Seagulls fly in circles above the scene
-    const centerX = this.timelineStart.x + this.timelineLength / 2;
     spawns.push({
       type: 'seagull',
-      path: this.createCircularPath(new THREE.Vector3(centerX, 30, 0), 60),
+      path: this.createCircularPath(new THREE.Vector3(0, 30, 0), 80),
       count: 12,
     });
     

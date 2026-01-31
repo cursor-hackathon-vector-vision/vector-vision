@@ -74,12 +74,53 @@ export interface CursorData {
   conversationCount: number;
 }
 
+// Unified Timeline Types
+export interface TimelineEventMeta {
+  commitHash?: string;
+  author?: string;
+  branch?: string;
+  additions?: number;
+  deletions?: number;
+  model?: string;
+  tokenCost?: number;
+  toolCalls?: string[];
+  conversationId?: string;
+  fileSize?: number;
+  lineCount?: number;
+}
+
+export interface TimelineEvent {
+  id: string;
+  timestamp: string;
+  type: string;
+  source: string;
+  title: string;
+  content: string;
+  files: string[];
+  meta: TimelineEventMeta;
+  lane: 'user' | 'ai' | 'git' | 'system';
+  color: number;
+}
+
+export interface UnifiedTimeline {
+  events: TimelineEvent[];
+  sources: string[];
+  dateRange: { start: string; end: string } | null;
+  stats: {
+    totalEvents: number;
+    byType: Record<string, number>;
+    bySource: Record<string, number>;
+  };
+  snapshots?: TimelineEvent[][];
+}
+
 export interface ProjectScanResult {
   name: string;
   path: string;
   files: ScannedFile[];
   gitHistory: GitHistory;
   cursorData: CursorData;
+  unifiedTimeline?: UnifiedTimeline;
 }
 
 export interface AgentSession {

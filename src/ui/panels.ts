@@ -288,13 +288,19 @@ export class UIPanels {
       });
     });
     
-    // Build chat list
-    chatList.innerHTML = chats.map((chat, index) => this.renderChatItem(chat, index)).join('');
+    // Build chat list (limit to 100 for performance)
+    const maxChats = 100;
+    const displayChats = chats.slice(-maxChats); // Show most recent
+    chatList.innerHTML = displayChats.map((chat, index) => this.renderChatItem(chat, index)).join('');
+    
+    if (chats.length > maxChats) {
+      chatList.innerHTML = `<div class="chat-info">Showing ${maxChats} of ${chats.length} messages</div>` + chatList.innerHTML;
+    }
     
     // Add click handlers to expand
     chatList.querySelectorAll('.chat-item').forEach((item, index) => {
       item.addEventListener('click', () => {
-        store.getState().setExpandedChat(chats[index]);
+        store.getState().setExpandedChat(displayChats[index]);
       });
     });
     
@@ -335,10 +341,15 @@ export class UIPanels {
     
     const currentIds = new Set(currentChats.map(c => c.id));
     
-    return allChats.map(chat => {
+    // Limit to max 200 dots to prevent memory issues
+    const maxDots = 200;
+    const step = allChats.length > maxDots ? Math.ceil(allChats.length / maxDots) : 1;
+    const sampledChats = allChats.filter((_, i) => i % step === 0).slice(0, maxDots);
+    
+    return sampledChats.map(chat => {
       const isActive = currentIds.has(chat.id);
       const roleClass = chat.role === 'user' ? 'user' : 'assistant';
-      return `<div class="timeline-dot ${roleClass} ${isActive ? 'active' : ''}" title="${chat.content.slice(0, 50)}"></div>`;
+      return `<div class="timeline-dot ${roleClass} ${isActive ? 'active' : ''}" title="${chat.content?.slice(0, 50) || ''}"></div>`;
     }).join('');
   }
   

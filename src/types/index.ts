@@ -41,6 +41,7 @@ export interface ChatMessage {
   content: string;
   relatedFiles: string[];
   model?: string;
+  tokenCost?: number;
 }
 
 export interface TerminalCommand {
@@ -49,6 +50,58 @@ export interface TerminalCommand {
   output: string;
   exitCode: number;
   duration: number;
+}
+
+// ============================================
+// UNIFIED TIMELINE TYPES
+// ============================================
+
+export type TimelineEventType = 
+  | 'git-commit'
+  | 'cursor-user'
+  | 'cursor-assistant'
+  | 'cursor-tool'
+  | 'claude-code'
+  | 'antigravity'
+  | 'file-created'
+  | 'file-modified'
+  | 'command';
+
+export interface TimelineEvent {
+  id: string;
+  timestamp: string; // ISO string from server
+  type: TimelineEventType | string; // Allow both enum and string for flexibility
+  source: string;
+  title: string;
+  content: string;
+  files: string[];
+  lane: 'user' | 'ai' | 'git' | 'system';
+  color: number;
+  meta: {
+    commitHash?: string;
+    author?: string;
+    branch?: string;
+    additions?: number;
+    deletions?: number;
+    model?: string;
+    tokenCost?: number;
+    toolCalls?: string[];
+    conversationId?: string;
+    fileSize?: number;
+    lineCount?: number;
+  };
+}
+
+export interface UnifiedTimeline {
+  events: TimelineEvent[];
+  sources: string[];
+  dateRange: { start: string; end: string } | null; // ISO strings from server
+  stats: {
+    totalEvents: number;
+    byType: Record<string, number>;
+    bySource: Record<string, number>;
+  };
+  snapshots?: TimelineEvent[][];
 }
 
 // ============================================

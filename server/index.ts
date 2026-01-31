@@ -6,6 +6,7 @@ import { getCursorData } from './cursorParser';
 import { discoverCursorProjects, getProjectConversations, quickScanForCursor } from './cursorDiscovery';
 import { getUniversalHistory } from './universalHistoryParser';
 import { getTranscripts, transcriptsToChatMessages } from './transcriptParser';
+import { getUnifiedTimeline, createTimelineSnapshots, type UnifiedTimeline } from './unifiedTimeline';
 import path from 'path';
 import fs from 'fs';
 
@@ -59,6 +60,10 @@ app.post('/api/scan', async (req, res) => {
     const transcriptMessages = transcriptsToChatMessages(transcripts);
     console.log(`[Transcripts] Found ${transcripts.length} transcripts with ${transcriptMessages.length} messages`);
     
+    // 🆕 Get UNIFIED TIMELINE (Git + Cursor + Claude + Antigravity + Files)
+    const unifiedTimeline = await getUnifiedTimeline(resolvedPath);
+    console.log(`[UnifiedTimeline] ${unifiedTimeline.events.length} events from: ${unifiedTimeline.sources.join(', ')}`);
+    
     // Build response
     const projectName = path.basename(resolvedPath);
     
@@ -90,6 +95,14 @@ app.post('/api/scan', async (req, res) => {
           count: transcripts.length,
           totalMessages: transcriptMessages.length,
           ids: transcripts.map(t => t.id),
+        },
+        // 🆕 UNIFIED TIMELINE - All sources merged!
+        unifiedTimeline: {
+          events: unifiedTimeline.events,
+          sources: unifiedTimeline.sources,
+          dateRange: unifiedTimeline.dateRange,
+          stats: unifiedTimeline.stats,
+          snapshots: createTimelineSnapshots(unifiedTimeline, 200),
         }
       }
     });

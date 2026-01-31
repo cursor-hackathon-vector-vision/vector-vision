@@ -314,10 +314,14 @@ class VectorVisionApp {
       this.updateStats(projectData);
       this.updateTimeline(projectData);
       
-      // Load final snapshot
-      this.onSnapshotChange(projectData.snapshots.length - 1);
+      // 🎬 SET ALL FILES from final snapshot (for complete city)
+      const allFiles = projectData.snapshots[projectData.snapshots.length - 1].files;
+      this.codeArchitecture?.setAllProjectFiles(allFiles);
       
-      this.showToast(`Loaded: ${projectData.name} (${projectData.snapshots.length} snapshots)`);
+      // 🎬 START FROM BEGINNING for timeline animation!
+      this.onSnapshotChange(0);
+      
+      this.showToast(`Loaded: ${projectData.name} (${projectData.snapshots.length} snapshots) - Press SPACE to play!`);
       console.log('Project loaded:', projectData.name);
       
     } catch (error) {
@@ -701,6 +705,10 @@ class VectorVisionApp {
           this.updateStats(projectData);
           this.updateTimeline(projectData);
           
+          // 🎬 SET ALL FILES from final snapshot
+          const allFiles = projectData.snapshots[projectData.snapshots.length - 1].files;
+          this.codeArchitecture?.setAllProjectFiles(allFiles);
+          
           // Start from BEGINNING for replay effect! (index 0)
           store.getState().setCurrentSnapshot(0);
           this.onSnapshotChange(0);
@@ -718,6 +726,11 @@ class VectorVisionApp {
       store.getState().setProjectData(projectData);
       this.updateStats(projectData);
       this.updateTimeline(projectData);
+      
+      // 🎬 SET ALL FILES from final snapshot
+      const allFiles = projectData.snapshots[projectData.snapshots.length - 1].files;
+      this.codeArchitecture?.setAllProjectFiles(allFiles);
+      
       store.getState().setCurrentSnapshot(0);
       this.onSnapshotChange(0);
       this.showToast('Demo project loaded! Press Space to play.');

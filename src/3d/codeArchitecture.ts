@@ -19,6 +19,8 @@ import {
   createPathLamp,
   type GrowingGridLayout
 } from './growingGrid';
+import { MessageHighway } from './messageHighway';
+import { HighlightManager } from './highlighting';
 import {
   MessageTimelineEngine,
   type MessageTimelineLayout,
@@ -40,6 +42,15 @@ import {
   updateAnimalPath,
   type Animal
 } from './animals';
+import {
+  createStreetNetwork,
+  addStreetNetworkToScene,
+  createRoadsideTrees,
+  type StreetNetwork,
+  type DistrictBounds
+} from './streetSystem';
+// streetLayout.ts DISABLED - using messageTimeline.ts for layout
+// import { calculateStreetLayout, buildFolderTree, renderStreetLayout, type StreetLayout, type BuildingSlot } from './streetLayout';
 
 /**
  * LIVING CODE ARCHITECTURE
@@ -76,6 +87,17 @@ interface CodeBuilding {
   label: THREE.Sprite;
   isNew: boolean;
   pulsePhase: number;
+  
+  // NEW: Growth animation state
+  hasBeenRevealed: boolean;    // Has this building been shown in timeline yet?
+  growthProgress: number;      // 0 = underground, 1 = fully grown
+  targetScale: number;         // Target Y scale (based on LOC)
+  currentScale: number;        // Current animated Y scale
+  revealedAtSnapshot: number;  // Snapshot index when first revealed
+  
+  // NEW: Token cost tracking
+  tokenCost: number;           // Total tokens spent on this file
+  tokenHeatLevel: number;      // 0-1 heat intensity for visualization
 }
 
 interface Connection {
@@ -139,6 +161,10 @@ export class CodeArchitecture {
   // Animation
   private time: number = 0;
   private chatParticles: THREE.Points[] = [];
+  private currentSnapshotIndex: number = 0;  // Track current position in timeline
+  
+  // ALL project files - for building city with complete file set
+  private allProjectFiles: FileNode[] = [];
   
   // Street cats!
   private cats: StreetCat[] = [];
@@ -159,6 +185,13 @@ export class CodeArchitecture {
   private growingGridEngine: GrowingGridEngine;
   private growingGridLayout: GrowingGridLayout | null = null;
   
+  // NEW: Message Highway System
+  private messageHighway: MessageHighway;
+  private lastQueuedMessageId: string = '';
+  
+  // NEW: Highlight System - beams from messages to buildings
+  private highlightManager: HighlightManager;
+  
   private streetGroup: THREE.Group;
   private districtGroup: THREE.Group;
   private decorationGroup: THREE.Group;
@@ -171,6 +204,14 @@ export class CodeArchitecture {
     this.simpleGridEngine = new SimpleGridEngine();
     this.growingGridEngine = new GrowingGridEngine();
     this.messageTimelineEngine = new MessageTimelineEngine();
+    
+    // DISABLED: Message Highway - we create our own simple road
+    this.messageHighway = new MessageHighway(scene);
+    // Hide it completely - the highway group is added to scene in constructor
+    (this.messageHighway as any).highwayGroup.visible = false;
+    
+    // Initialize Highlight Manager
+    this.highlightManager = new HighlightManager(scene);
     
     // Create groups
     this.groundGroup = new THREE.Group();
@@ -237,16 +278,8 @@ export class CodeArchitecture {
   }
   
   private createMinimalGround(): void {
-    // NO ground plane - just a thin reference plane for shadows
-    // Streets and districts provide visual grounding
-    
-    // Optional: Very subtle infinite grid reference
-    // Position BELOW all roads to avoid z-fighting
-    const gridHelper = new THREE.GridHelper(400, 80, 0x222244, 0x111122);
-    gridHelper.position.y = -0.1; // Below road baseline
-    (gridHelper.material as THREE.Material).transparent = true;
-    (gridHelper.material as THREE.Material).opacity = 0.1;
-    this.groundGroup.add(gridHelper);
+    // NO ground plane, NO grid - completely clean!
+    // Only roads and buildings provide visual reference
   }
   
   // @ts-ignore - Deprecated: Streets now created by AdvancedLayoutEngine
@@ -1058,6 +1091,36 @@ export class CodeArchitecture {
     this.isTimelineBuilt = false;
     this.lastCityHash = '';
     this.lastProjectHash = '';
+    this.currentSnapshotIndex = 0;
+    
+    // Reset all building growth states for replay
+    for (const building of this.buildings.values()) {
+      building.hasBeenRevealed = false;
+      building.growthProgress = 0;
+      building.currentScale = 0;
+      building.revealedAtSnapshot = -1;
+      building.group.visible = false;
+      building.group.scale.y = 0.01;
+      building.group.position.y = -0.5;
+    }
+    
+    // Clear all buildings for complete reset
+    for (const [, building] of this.buildings) {
+      this.removeBuilding(building);
+    }
+    this.buildings.clear();
+    
+    // Clear timeline markers
+    this.messageMarkers.clear();
+    this.tokenTrees.clear();
+    this.timelineGroup.clear();
+    
+    // Clear message highway
+    this.messageHighway.clear();
+    this.lastQueuedMessageId = '';
+    
+    // Clear highlights
+    this.highlightManager.clear();
   }
   
   /**
@@ -1080,103 +1143,204 @@ export class CodeArchitecture {
   }
   
   /**
-   * Full city rebuild using GROWING GRID
-   * - Spiral growth pattern from center
-   * - Narrow cat paths between buildings
-   * - Colored connection paths for imports/functions
+   * Set ALL project files (used for building complete city)
+   * Call this before starting the timeline!
+   */
+  public setAllProjectFiles(files: FileNode[]): void {
+    this.allProjectFiles = files;
+    console.log('[CodeArchitecture] Set all project files:', files.length);
+  }
+  
+  // Street network for proper road-based layout
+  private streetNetwork: StreetNetwork | null = null;
+  // DISABLED: private currentStreetLayout: StreetLayout | null = null;
+  
+  /**
+   * Full city rebuild using NEW STREET-BASED LAYOUT v2
+   * 
+   * Hauptstraße: Süd → Nord (entlang -Z)
+   * Seitenstraßen: West/Ost (entlang X) für Ordner
+   * Sub-Ordner: Parallel zur Hauptstraße (entlang -Z)
+   * Buildings: Immer auf NORDSEITE der Straßen
+   * 
+   * IMPORTANT: Builds ALL buildings (from allProjectFiles), not just current snapshot!
    */
   private async rebuildCityLayout(
-    snapshot: ProjectSnapshot,
+    _snapshot: ProjectSnapshot,
     fileContents?: Record<string, { content: string; lines: string[]; functions: string[]; imports: string[] }>
   ): Promise<void> {
     const startTime = performance.now();
     
-    const currentPaths = new Set(snapshot.files.map(f => f.path));
+    // Use ALL files for building
+    const filesToBuild = this.allProjectFiles.length > 0 
+      ? this.allProjectFiles 
+      : _snapshot.files;
     
-    // Remove buildings for deleted files
-    for (const [path, building] of this.buildings) {
-      if (!currentPaths.has(path)) {
-        this.removeBuilding(building);
-        this.buildings.delete(path);
+    console.log('[City] Building', filesToBuild.length, 'buildings along SIDE STREETS');
+    
+    // === USE TIMELINE LAYOUT - Buildings along side streets! ===
+    if (this.timelineLayout && this.timelineLayout.districts.length > 0) {
+      let buildingCount = 0;
+      
+      for (const district of this.timelineLayout.districts) {
+        // Each block = one file position along the side street
+        for (const block of district.blocks) {
+          // Find the file for this block
+          const blockFile = block.files[0];
+          if (!blockFile) continue;
+          
+          const file = filesToBuild.find(f => 
+            f.path.endsWith(blockFile.name) || 
+            f.name === blockFile.name
+          );
+          if (!file) continue;
+          
+          const fileWithContent: FileWithContent = { ...file };
+          
+          if (fileContents && fileContents[file.path]) {
+            fileWithContent.content = fileContents[file.path].content;
+            fileWithContent.lines = fileContents[file.path].lines;
+            fileWithContent.functions = fileContents[file.path].functions;
+            fileWithContent.imports = fileContents[file.path].imports;
+          }
+          
+          // Position from block (along side street)
+          const position = new THREE.Vector3(
+            block.position.x,
+            0.15,
+            block.position.z
+          );
+          
+          if (this.buildings.has(file.path)) {
+            this.updateBuilding(fileWithContent, position, 0);
+          } else {
+            this.createBuilding(fileWithContent, position, 0);
+          }
+          
+          buildingCount++;
+        }
       }
-    }
-    
-    // Prepare file data with imports for connections
-    const filesWithImports = snapshot.files.map(f => ({
-      path: f.path,
-      imports: fileContents?.[f.path]?.imports || []
-    }));
-    
-    // Calculate GROWING GRID layout with connections
-    this.growingGridLayout = this.growingGridEngine.calculateLayout(
-      filesWithImports,
-      snapshot.files.length  // All files visible
-    );
-    
-    // Render the grid (cat paths) and connections (colored lines)
-    renderGrowingGrid(this.growingGridLayout, this.streetGroup, this.connectionGroup);
-    
-    // Add some lamps at path intersections
-    this.addPathLamps();
-    
-    // Place buildings on grid positions
-    for (const gridBuilding of this.growingGridLayout.buildings) {
-      const file = snapshot.files.find(f => f.path === gridBuilding.id);
-      if (!file) continue;
       
-      const fileWithContent: FileWithContent = { ...file };
+      console.log('[City] Placed', buildingCount, 'buildings along side streets');
+    } else {
+      // Fallback: simple grid next to highway
+      console.log('[City] No districts, using simple grid');
       
-      if (fileContents && fileContents[file.path]) {
-        fileWithContent.content = fileContents[file.path].content;
-        fileWithContent.lines = fileContents[file.path].lines;
-        fileWithContent.functions = fileContents[file.path].functions;
-        fileWithContent.imports = fileContents[file.path].imports;
-      }
+      const HIGHWAY_OFFSET = 25;
+      const BUILDING_SPACING = 6;
+      const GRID_COLS = Math.ceil(Math.sqrt(filesToBuild.length));
       
-      const position = new THREE.Vector3(gridBuilding.worldX, 0.15, gridBuilding.worldZ);
-      const rotation = 0; // Align to grid
-      
-      if (this.buildings.has(file.path)) {
-        this.updateBuilding(fileWithContent, position, rotation);
-      } else {
-        this.createBuilding(fileWithContent, position, rotation);
-      }
-    }
-    
-    console.log('[City] Growing grid rebuild took', (performance.now() - startTime).toFixed(1), 'ms');
-    console.log('[City] Buildings:', this.growingGridLayout.buildings.length,
-                'Paths:', this.growingGridLayout.paths.length,
-                'Connections:', this.growingGridLayout.connections.length);
-  }
-  
-  /**
-   * Add lamps at some path intersections
-   */
-  private addPathLamps(): void {
-    if (!this.growingGridLayout) return;
-    
-    // Add lamps at every few buildings
-    this.growingGridLayout.buildings.forEach((building, index) => {
-      if (index % 4 === 0) {
-        const lamp = createPathLamp(
-          building.worldX + 2,
-          building.worldZ + 2
+      let index = 0;
+      for (const file of filesToBuild) {
+        const fileWithContent: FileWithContent = { ...file };
+        
+        if (fileContents && fileContents[file.path]) {
+          fileWithContent.content = fileContents[file.path].content;
+          fileWithContent.lines = fileContents[file.path].lines;
+          fileWithContent.functions = fileContents[file.path].functions;
+          fileWithContent.imports = fileContents[file.path].imports;
+        }
+        
+        const row = Math.floor(index / GRID_COLS);
+        const col = index % GRID_COLS;
+        
+        const position = new THREE.Vector3(
+          HIGHWAY_OFFSET + col * BUILDING_SPACING,
+          0.15,
+          (row - Math.floor(filesToBuild.length / GRID_COLS) / 2) * BUILDING_SPACING
         );
-        this.decorationGroup.add(lamp);
+        
+        if (this.buildings.has(file.path)) {
+          this.updateBuilding(fileWithContent, position, 0);
+        } else {
+          this.createBuilding(fileWithContent, position, 0);
+        }
+        
+        index++;
       }
-    });
+    }
+    
+    console.log('[City] Rebuild took', (performance.now() - startTime).toFixed(1), 'ms');
+  }
+  
+  // DISABLED: Old streetLayout-based methods - now using renderDistricts for all street/decoration rendering
+  /*
+  private addRoadsideTrees(): void { ... }
+  private addStreetLamps(): void { ... }
+  */
+
+  /**
+   * Add a floating sign for the district (LEGACY - using x,z coordinates)
+   */
+  private addLegacyDistrictSign(name: string, x: number, z: number): void {
+    // Create canvas for text
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+    
+    // Background
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.roundRect(0, 0, 256, 64, 8);
+    ctx.fill();
+    
+    // Text
+    ctx.fillStyle = '#4fc3f7';
+    ctx.font = 'bold 24px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    
+    // Show just the folder name
+    const shortName = name.split('/').pop() || name;
+    ctx.fillText(shortName.slice(0, 20), 128, 32);
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(8, 2, 1);
+    sprite.position.set(x, 4, z);
+    
+    this.decorationGroup.add(sprite);
   }
   
   /**
-   * Fast visibility update for buildings
+   * Fast visibility update for buildings WITH GROWTH ANIMATION
+   * Buildings grow from the ground when first revealed in the timeline!
    */
-  private updateBuildingVisibility(snapshot: ProjectSnapshot): void {
+  private updateBuildingVisibility(snapshot: ProjectSnapshot, snapshotIndex: number = 0): void {
     const currentPaths = new Set(snapshot.files.map(f => f.path));
+    const colors = FILE_COLORS; // For spawn effect
     
     // Show/hide buildings based on current snapshot
     for (const [path, building] of this.buildings) {
-      building.mesh.visible = currentPaths.has(path);
-      if (building.glowMesh) building.glowMesh.visible = currentPaths.has(path);
+      const shouldBeVisible = currentPaths.has(path);
+      
+      if (shouldBeVisible && !building.hasBeenRevealed) {
+        // 🎬 FIRST REVEAL! Start growth animation
+        building.hasBeenRevealed = true;
+        building.revealedAtSnapshot = snapshotIndex;
+        building.growthProgress = 0;
+        building.currentScale = 0.01;
+        building.group.visible = true;
+        
+        // Spawn effect when building emerges
+        const fileColors = colors[building.fileNode.extension] || colors['default'];
+        this.spawnBuildingEffect(building.position, fileColors.glow);
+        
+        console.log(`[Growth] Building revealed: ${building.fileNode.name}`);
+      } else if (shouldBeVisible && building.hasBeenRevealed) {
+        // Already revealed, ensure visible
+        building.group.visible = true;
+      } else {
+        // NOT in current snapshot - HIDE IT!
+        // This creates proper timeline animation where buildings appear over time
+        building.group.visible = false;
+      }
+      
+      // Update mesh visibility for glow
+      if (building.glowMesh) {
+        building.glowMesh.visible = shouldBeVisible && building.growthProgress > 0.5;
+      }
     }
   }
   
@@ -1302,8 +1466,12 @@ export class CodeArchitecture {
     height: number;
     plotSize: number;
   } {
-    const loc = file.lines?.length || file.linesOfCode || 10;
-    const funcCount = file.functions?.length || 0;
+    // Safety checks for NaN
+    let loc = file.lines?.length || file.linesOfCode || 10;
+    if (isNaN(loc) || loc < 1) loc = 10;
+    
+    let funcCount = file.functions?.length || 0;
+    if (isNaN(funcCount)) funcCount = 0;
     
     // Smart scaling: Use logarithmic scale for very large files
     // to prevent extremely tall buildings
@@ -1502,7 +1670,7 @@ export class CodeArchitecture {
     // Add to scene
     this.buildingGroup.add(group);
     
-    // Store building data
+    // Store building data with growth animation state
     const building: CodeBuilding = {
       id: file.path,
       fileNode: file,
@@ -1513,20 +1681,42 @@ export class CodeArchitecture {
       textTexture,
       position,
       targetY: 0,
-      currentY: isNew ? -buildingHeight : 0,
+      currentY: 0,
       height: buildingHeight,
       glowMesh,
       label,
       isNew,
       pulsePhase: Math.random() * Math.PI * 2,
+      
+      // NEW: Growth animation - all buildings start hidden/underground
+      hasBeenRevealed: false,
+      growthProgress: 0,
+      targetScale: 1,
+      currentScale: 0,  // Start at 0 scale (invisible)
+      revealedAtSnapshot: -1,
+      
+      // NEW: Token cost tracking
+      tokenCost: 0,
+      tokenHeatLevel: 0,
     };
+    
+    // DEBUG: Make buildings visible immediately to test layout
+    // TODO: Re-enable growth animation after layout is confirmed working
+    group.scale.y = 1;  // Full height
+    group.position.y = 0; // On ground
+    group.visible = true;  // Visible immediately
+    
+    // Mark as revealed so animation doesn't try to grow it
+    building.hasBeenRevealed = true;
+    building.growthProgress = 1;
+    building.currentScale = 1;
     
     this.buildings.set(file.path, building);
     
-    // Spawn animation for new buildings
-    if (isNew) {
-      this.spawnBuildingEffect(position, colors.glow);
-    }
+    // Don't spawn effect yet - will happen when revealed
+    // if (isNew) {
+    //   this.spawnBuildingEffect(position, colors.glow);
+    // }
   }
   
   /**
@@ -2275,26 +2465,45 @@ export class CodeArchitecture {
       }
     }
     
-    // OPTIMIZED: Only animate visible buildings, max 20 per frame
+    // OPTIMIZED: Animate visible buildings with GROWTH ANIMATION
     let animatedCount = 0;
     for (const building of this.buildings.values()) {
-      if (!building.mesh.visible || animatedCount >= 20) continue;
+      if (!building.group.visible || animatedCount >= 30) continue;
       animatedCount++;
       
-      // Smooth rise animation for new buildings
-      if (building.currentY < building.targetY - 0.01) {
-        building.currentY += (building.targetY - building.currentY) * 0.1;
-        building.group.position.y = building.currentY;
+      // 🎬 GROWTH ANIMATION - Buildings grow from ground!
+      if (building.hasBeenRevealed && building.growthProgress < 1) {
+        // Smooth easing for natural growth
+        building.growthProgress += (1 - building.growthProgress) * 0.08;
+        
+        // Clamp to 1 when close enough
+        if (building.growthProgress > 0.99) {
+          building.growthProgress = 1;
+        }
+        
+        // Apply growth: scale Y and position Y
+        const easeOutBack = this.easeOutBack(building.growthProgress);
+        building.currentScale = easeOutBack;
+        building.group.scale.y = Math.max(0.01, easeOutBack);
+        
+        // Rise from underground
+        const targetY = 0;
+        const startY = -building.height * 0.3;
+        building.group.position.y = startY + (targetY - startY) * building.growthProgress;
+        
+        // Bounce effect at the end
+        if (building.growthProgress > 0.8 && building.growthProgress < 1) {
+          const bouncePhase = (building.growthProgress - 0.8) / 0.2;
+          const bounce = Math.sin(bouncePhase * Math.PI * 2) * 0.03 * (1 - bouncePhase);
+          building.group.scale.y *= (1 + bounce);
+        }
       }
       
-      // Simple pulse for active buildings (no material changes - expensive!)
-      if (building.isNew || building.fileNode.status === 'modified') {
-        const pulse = Math.sin(this.time * 2 + building.pulsePhase) * 0.05 + 1;
+      // Simple pulse for active/new buildings
+      if ((building.isNew || building.fileNode.status === 'modified') && building.growthProgress >= 1) {
+        const pulse = Math.sin(this.time * 2 + building.pulsePhase) * 0.03 + 1;
         building.mesh.scale.setScalar(pulse);
       }
-      
-      // Skip label animation - static is fine
-      // Skip data stream animation - too expensive
     }
     
     // SKIP connection particle animation - way too expensive
@@ -2318,6 +2527,17 @@ export class CodeArchitecture {
     
     // Update connection arc animations
     updateConnectionArcs(this.connectionArcs, this.time);
+    
+    // Update street network animations (data streams, intersections)
+    if (this.streetNetwork && this.frameCount % 3 === 0) {
+      this.streetNetwork.update(this.time);
+    }
+    
+    // 🚗 DISABLED: Message Highway vehicles
+    // this.messageHighway.update(delta);
+    
+    // ✨ Update Highlight beams
+    this.highlightManager.update(delta);
   }
   
   private updateStreetLightFlicker(): void {
@@ -2484,13 +2704,14 @@ export class CodeArchitecture {
     this.animals.forEach(animal => this.decorationGroup.remove(animal.group));
     this.animals = [];
     
-    // Render all timeline elements (but hidden initially)
-    this.renderTimelineElementsOptimized(this.timelineLayout);
+    // 🧹 IMPORTANT: Clear streets and decorations BEFORE re-rendering!
+    this.clearCityElements();
     
-    // NOTE: District streets/decorations now handled by Simple Grid in rebuildCityLayout
-    // this.renderDistricts(this.timelineLayout);
+    // ✅ RE-ENABLED: The GOOD old system!
+    // Render districts with proper streets branching from main road
+    this.renderDistricts(this.timelineLayout);
     
-    // Spawn animals ONCE
+    // Spawn animals
     this.spawnAnimals(this.timelineLayout);
     
     // Update buildings ONCE
@@ -2501,9 +2722,83 @@ export class CodeArchitecture {
   
   /**
    * Fast visibility update (cheap - runs every snapshot change)
+   * NOW INCLUDES BUILDING GROWTH ANIMATION & MESSAGE HIGHWAY!
    */
   private updateTimelineVisibility(snapshot: ProjectSnapshot): void {
     const currentChatIds = new Set(snapshot.chats.map(c => c.id));
+    
+    // Increment snapshot index for tracking growth
+    this.currentSnapshotIndex = snapshot.chats.length; // Use chat count as proxy
+    
+    // 🎬 UPDATE BUILDING VISIBILITY WITH GROWTH!
+    this.updateBuildingVisibility(snapshot, this.currentSnapshotIndex);
+    
+    // 🚗 DISABLED: Old MessageHighway system - messages shown in UI instead
+    // Queue new messages for highlights only (no highway vehicles)
+    if (snapshot.chats.length > 0) {
+      const latestMessage = snapshot.chats[snapshot.chats.length - 1];
+      if (latestMessage.id !== this.lastQueuedMessageId) {
+        // DISABLED: this.messageHighway.queueMessage(latestMessage);
+        this.lastQueuedMessageId = latestMessage.id;
+        // console.log(`[Highway] Queued message: ${latestMessage.role}`);
+        
+        // ✨ CREATE HIGHLIGHTS to affected buildings
+        if (latestMessage.relatedFiles && latestMessage.relatedFiles.length > 0) {
+          const highlightTargets: { id: string; position: THREE.Vector3; type: 'created' | 'modified' | 'referenced' }[] = [];
+          
+          // Estimate tokens for this message
+          const messageTokens = this.estimateTokenCost(latestMessage);
+          const tokensPerFile = Math.ceil(messageTokens / latestMessage.relatedFiles.length);
+          
+          console.log(`[Highlight] Searching for ${latestMessage.relatedFiles.length} related files, buildings: ${this.buildings.size}`);
+          
+          for (const filePath of latestMessage.relatedFiles) {
+            // Try direct path match first
+            let building = this.buildings.get(filePath);
+            
+            // If not found, try matching by filename
+            if (!building) {
+              const fileName = filePath.split('/').pop() || '';
+              for (const [path, b] of this.buildings) {
+                if (path.endsWith(fileName) || path.includes(filePath) || filePath.includes(path.split('/').pop() || '')) {
+                  building = b;
+                  console.log(`[Highlight] Fuzzy matched: ${filePath} -> ${path}`);
+                  break;
+                }
+              }
+            }
+            
+            // Allow highlights for ANY visible building (not just revealed)
+            if (building && building.group.visible) {
+              highlightTargets.push({
+                id: filePath,
+                position: building.position.clone(),
+                type: building.isNew ? 'created' : 'modified',
+              });
+              
+              // 💰 TRACK TOKEN COST PER FILE
+              this.addTokenCostToFile(filePath, tokensPerFile);
+            } else {
+              console.log(`[Highlight] Building not found or not visible: ${filePath}`);
+            }
+          }
+          
+          if (highlightTargets.length > 0) {
+            // Source position on main road (centered, slightly elevated)
+            const sourcePos = new THREE.Vector3(0, 2, 0);
+            this.highlightManager.highlightFiles(
+              latestMessage.id,
+              sourcePos,
+              highlightTargets,
+              5000  // 5 second highlight
+            );
+            console.log(`[Highlight] Created ${highlightTargets.length} beams, ${tokensPerFile} tokens each`);
+          } else {
+            console.log(`[Highlight] No buildings found for ${latestMessage.relatedFiles.length} related files`);
+          }
+        }
+      }
+    }
     
     // Show/hide message markers based on current snapshot
     this.messageMarkers.forEach((marker, id) => {
@@ -2633,44 +2928,182 @@ export class CodeArchitecture {
    * Render districts with their streets and decorations
    */
   private renderDistricts(layout: MessageTimelineLayout): void {
-    // Render ALL districts - no limits!
-    for (const district of layout.districts) {
-      // Render ALL district streets
-      for (const street of district.streets) {
-        const road = this.createDistrictRoad(street);
-        this.streetGroup.add(road);
-      }
-      
-      // Render ALL decorations
-      for (const deco of district.decorations) {
-        
-        let mesh: THREE.Group;
-        
-        switch (deco.type) {
-          case 'park':
-            mesh = createPark(deco.scale);
-            break;
-          case 'fountain':
-            mesh = createFountain(deco.scale);
-            break;
-          case 'bench':
-            mesh = createBench(deco.scale);
-            break;
-          case 'tree':
-            mesh = this.createSimpleTree(deco.scale);
-            break;
-          case 'lamp':
-            mesh = this.createSimpleLamp(deco.scale);
-            break;
-          default:
-            continue;
-        }
-        
-        mesh.position.copy(deco.position);
-        mesh.userData.delay = deco.delay;
-        this.decorationGroup.add(mesh);
+    console.log('[Streets] Rendering SINGLE MAIN HIGHWAY (Süd→Nord) + SIDE STREETS');
+    
+    // === ONLY ONE MAIN HIGHWAY running SOUTH to NORTH (along Z-axis) ===
+    const ROAD_LENGTH = 500;
+    const ROAD_WIDTH = 12;  // 4 lanes
+    const SIDEWALK_WIDTH = 2;
+    
+    // Main road surface (dark asphalt)
+    const roadGeom = new THREE.PlaneGeometry(ROAD_WIDTH, ROAD_LENGTH);
+    const roadMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a3a,
+      roughness: 0.85,
+    });
+    const road = new THREE.Mesh(roadGeom, roadMat);
+    road.rotation.x = -Math.PI / 2;
+    road.position.set(0, 0.01, 0);
+    this.streetGroup.add(road);
+    
+    // Sidewalks on both sides
+    for (const side of [-1, 1]) {
+      const sidewalkGeom = new THREE.PlaneGeometry(SIDEWALK_WIDTH, ROAD_LENGTH);
+      const sidewalkMat = new THREE.MeshStandardMaterial({
+        color: 0x555566,
+        roughness: 0.7,
+      });
+      const sidewalk = new THREE.Mesh(sidewalkGeom, sidewalkMat);
+      sidewalk.rotation.x = -Math.PI / 2;
+      sidewalk.position.set(side * (ROAD_WIDTH / 2 + SIDEWALK_WIDTH / 2), 0.02, 0);
+      this.streetGroup.add(sidewalk);
+    }
+    
+    // Center lane marking (glowing cyan)
+    const centerGeom = new THREE.PlaneGeometry(0.4, ROAD_LENGTH);
+    const centerMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const center = new THREE.Mesh(centerGeom, centerMat);
+    center.rotation.x = -Math.PI / 2;
+    center.position.set(0, 0.03, 0);
+    this.streetGroup.add(center);
+    
+    // Dashed lane markings
+    const dashCount = Math.floor(ROAD_LENGTH / 10);
+    for (let i = 0; i < dashCount; i++) {
+      const z = -ROAD_LENGTH / 2 + i * 10 + 5;
+      for (const laneOffset of [-3, 3]) {
+        const dashGeom = new THREE.PlaneGeometry(0.15, 5);
+        const dashMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.6,
+        });
+        const dash = new THREE.Mesh(dashGeom, dashMat);
+        dash.rotation.x = -Math.PI / 2;
+        dash.position.set(laneOffset, 0.025, z);
+        this.streetGroup.add(dash);
       }
     }
+    
+    // Street lamps along the main highway
+    const lampSpacing = 35;
+    const lampCount = Math.floor(ROAD_LENGTH / lampSpacing);
+    for (let i = 0; i < lampCount; i++) {
+      const z = -ROAD_LENGTH / 2 + i * lampSpacing + lampSpacing / 2;
+      for (const side of [-1, 1]) {
+        const lamp = this.createSimpleLamp(1);
+        lamp.position.set(side * (ROAD_WIDTH / 2 + SIDEWALK_WIDTH + 1), 0, z);
+        lamp.rotation.y = side > 0 ? 0 : Math.PI; // Face the road
+        this.decorationGroup.add(lamp);
+      }
+    }
+    
+    // === SIDE STREETS for each district (folder) ===
+    for (const district of layout.districts) {
+      // Add district sign
+      if (district.streets.length > 0) {
+        const street = district.streets[0];
+        const signPos = street.points[0].clone();
+        signPos.x += (street.points[1].x > 0 ? 1 : -1) * 5; // Offset into side street
+        this.addDistrictSign(district.name, signPos);
+      }
+      
+      // Render the side street
+      for (const street of district.streets) {
+        const sideRoad = this.createDistrictRoad(street);
+        this.streetGroup.add(sideRoad);
+      }
+      
+      // Add a few lamps along the side street
+      for (const deco of district.decorations) {
+        if (deco.type === 'lamp') {
+          const lamp = this.createSimpleLamp(deco.scale);
+          lamp.position.copy(deco.position);
+          this.decorationGroup.add(lamp);
+        }
+      }
+    }
+    
+    console.log('[Streets] Rendered 1 main highway +', layout.districts.length, 'side streets');
+  }
+  
+  /**
+   * Add glowing center median for the main highway
+   */
+  private addMainRoadMedian(mainRoad: any): void {
+    if (!mainRoad.points || mainRoad.points.length < 2) return;
+    
+    const start = mainRoad.points[0];
+    const end = mainRoad.points[1];
+    const length = start.distanceTo(end);
+    
+    // Glowing cyan median strip
+    const medianGeom = new THREE.PlaneGeometry(0.5, length);
+    const medianMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.95,
+    });
+    const median = new THREE.Mesh(medianGeom, medianMat);
+    median.rotation.x = -Math.PI / 2;
+    median.position.set(0, 0.06, (start.z + end.z) / 2);
+    this.streetGroup.add(median);
+    
+    // Add pulsing glow effect (wider underlying strip)
+    const glowGeom = new THREE.PlaneGeometry(2, length);
+    const glowMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.3,
+    });
+    const glow = new THREE.Mesh(glowGeom, glowMat);
+    glow.rotation.x = -Math.PI / 2;
+    glow.position.set(0, 0.05, (start.z + end.z) / 2);
+    this.streetGroup.add(glow);
+  }
+  
+  /**
+   * Add a district sign visible from the south
+   */
+  private addDistrictSign(name: string, position: THREE.Vector3): void {
+    // Sign post
+    const postGeom = new THREE.CylinderGeometry(0.1, 0.15, 4, 8);
+    const postMat = new THREE.MeshStandardMaterial({ color: 0x2a2a3e });
+    const post = new THREE.Mesh(postGeom, postMat);
+    post.position.set(position.x, 2, position.z + 2); // Slightly south of connection point
+    this.decorationGroup.add(post);
+    
+    // Sign board
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, 256, 64);
+    ctx.strokeStyle = '#00ffff';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(2, 2, 252, 60);
+    ctx.fillStyle = '#00ffff';
+    ctx.font = 'bold 28px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText(name.toUpperCase(), 128, 42);
+    
+    const signTexture = new THREE.CanvasTexture(canvas);
+    const signGeom = new THREE.PlaneGeometry(4, 1);
+    const signMat = new THREE.MeshBasicMaterial({ 
+      map: signTexture, 
+      transparent: true,
+      side: THREE.DoubleSide 
+    });
+    const sign = new THREE.Mesh(signGeom, signMat);
+    sign.position.set(position.x, 4, position.z + 2);
+    // Face south so it's readable when looking north
+    sign.rotation.y = 0;
+    this.decorationGroup.add(sign);
   }
   
   /**
@@ -2908,21 +3341,122 @@ export class CodeArchitecture {
   }
   
   /**
+   * Easing function for building growth animation
+   * Creates a nice "bounce back" effect at the end
+   */
+  private easeOutBack(x: number): number {
+    const c1 = 1.70158;
+    const c3 = c1 + 1;
+    return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+  }
+  
+  /**
+   * Add token cost to a file and update heat map
+   */
+  public addTokenCostToFile(filePath: string, tokens: number): void {
+    const building = this.buildings.get(filePath);
+    if (!building) return;
+    
+    building.tokenCost += tokens;
+    
+    // Calculate heat level (log scale for better visualization)
+    // $0.01 = cool, $0.10 = warm, $1.00+ = hot
+    const costUSD = building.tokenCost * 0.000015; // ~$0.015 per 1K tokens
+    building.tokenHeatLevel = Math.min(1, Math.log10(costUSD * 100 + 1) / 2);
+    
+    // Apply heat color to building
+    this.applyHeatMap(building);
+  }
+  
+  /**
+   * Apply heat map color to building based on token cost
+   */
+  private applyHeatMap(building: CodeBuilding): void {
+    if (!building.mesh) return;
+    
+    const heat = building.tokenHeatLevel;
+    
+    // Color gradient: Green (cool) -> Yellow -> Orange -> Red (hot)
+    let heatColor: THREE.Color;
+    if (heat < 0.33) {
+      // Green to Yellow
+      heatColor = new THREE.Color().lerpColors(
+        new THREE.Color(0x48bb78), // Green
+        new THREE.Color(0xf6e05e), // Yellow
+        heat * 3
+      );
+    } else if (heat < 0.66) {
+      // Yellow to Orange
+      heatColor = new THREE.Color().lerpColors(
+        new THREE.Color(0xf6e05e), // Yellow
+        new THREE.Color(0xed8936), // Orange
+        (heat - 0.33) * 3
+      );
+    } else {
+      // Orange to Red
+      heatColor = new THREE.Color().lerpColors(
+        new THREE.Color(0xed8936), // Orange
+        new THREE.Color(0xf56565), // Red
+        (heat - 0.66) * 3
+      );
+    }
+    
+    // Apply emissive glow based on heat
+    const material = building.mesh.material as THREE.MeshStandardMaterial;
+    if (material.emissive) {
+      material.emissive = heatColor;
+      material.emissiveIntensity = 0.1 + heat * 0.4;
+    }
+    
+    // Update glow mesh if exists
+    if (building.glowMesh) {
+      const glowMat = building.glowMesh.material as THREE.MeshBasicMaterial;
+      glowMat.color = heatColor;
+      glowMat.opacity = 0.1 + heat * 0.3;
+    }
+  }
+  
+  /**
+   * Get top files by token cost
+   */
+  public getTopFilesByTokenCost(limit: number = 5): { path: string; tokens: number; costUSD: number }[] {
+    const files: { path: string; tokens: number; costUSD: number }[] = [];
+    
+    for (const building of this.buildings.values()) {
+      if (building.tokenCost > 0) {
+        files.push({
+          path: building.id,
+          tokens: building.tokenCost,
+          costUSD: building.tokenCost * 0.000015,
+        });
+      }
+    }
+    
+    // Sort by tokens descending
+    files.sort((a, b) => b.tokens - a.tokens);
+    
+    return files.slice(0, limit);
+  }
+  
+  /**
    * Create simple tree (for district decoration)
    */
-  private createSimpleTree(scale: number): THREE.Group {
+  private createSimpleTree(scale: number = 1): THREE.Group {
     const tree = new THREE.Group();
     
-    const trunkGeom = new THREE.CylinderGeometry(0.2 * scale, 0.3 * scale, 1.5 * scale, 6);
+    // Safety check for scale
+    const s = isNaN(scale) || scale <= 0 ? 1 : scale;
+    
+    const trunkGeom = new THREE.CylinderGeometry(0.2 * s, 0.3 * s, 1.5 * s, 6);
     const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3728 });
     const trunk = new THREE.Mesh(trunkGeom, trunkMat);
-    trunk.position.y = 0.75 * scale;
+    trunk.position.y = 0.75 * s;
     tree.add(trunk);
     
-    const crownGeom = new THREE.ConeGeometry(scale, 2 * scale, 6);
+    const crownGeom = new THREE.ConeGeometry(s, 2 * s, 6);
     const crownMat = new THREE.MeshStandardMaterial({ color: 0x3d7a37 });
     const crown = new THREE.Mesh(crownGeom, crownMat);
-    crown.position.y = 2.5 * scale;
+    crown.position.y = 2.5 * s;
     tree.add(crown);
     
     return tree;
@@ -2932,46 +3466,50 @@ export class CodeArchitecture {
    * Create simple streetlamp (for district decoration)
    * Smaller, more realistic proportions
    */
-  private createSimpleLamp(scale: number): THREE.Group {
+  private createSimpleLamp(scale: number = 1): THREE.Group {
     const lamp = new THREE.Group();
     
+    // Safety check for scale
+    const s = isNaN(scale) || scale <= 0 ? 1 : scale;
+    
     // Shorter, thinner pole
-    const poleHeight = 2.5 * scale;
-    const poleGeom = new THREE.CylinderGeometry(0.05 * scale, 0.08 * scale, poleHeight, 6);
+    const poleHeight = 2.5 * s;
+    const poleGeom = new THREE.CylinderGeometry(0.05 * s, 0.08 * s, poleHeight, 6);
     const poleMat = new THREE.MeshStandardMaterial({ color: 0x2a2a3a });
     const pole = new THREE.Mesh(poleGeom, poleMat);
     pole.position.y = poleHeight / 2;
     lamp.add(pole);
     
-    // Lamp arm
-    const armGeom = new THREE.CylinderGeometry(0.03 * scale, 0.03 * scale, 0.4 * scale, 4);
+    // Lamp arm - NOW POINTING IN Z DIRECTION (toward main road)
+    // Rotated 90° so arm extends along Z axis instead of X
+    const armGeom = new THREE.CylinderGeometry(0.03 * s, 0.03 * s, 0.4 * s, 4);
     const arm = new THREE.Mesh(armGeom, poleMat);
-    arm.rotation.z = Math.PI / 2;
-    arm.position.set(0.2 * scale, poleHeight - 0.1, 0);
+    arm.rotation.x = Math.PI / 2;  // Rotate to Z axis
+    arm.position.set(0, poleHeight - 0.1, 0.2 * s);  // Extend in Z direction
     lamp.add(arm);
     
-    // Lamp housing (cone pointing down)
-    const housingGeom = new THREE.ConeGeometry(0.15 * scale, 0.2 * scale, 6);
+    // Lamp housing (cone pointing down) - also moved to Z direction
+    const housingGeom = new THREE.ConeGeometry(0.15 * s, 0.2 * s, 6);
     const housingMat = new THREE.MeshStandardMaterial({ color: 0x333344 });
     const housing = new THREE.Mesh(housingGeom, housingMat);
     housing.rotation.x = Math.PI; // Point down
-    housing.position.set(0.4 * scale, poleHeight - 0.15, 0);
+    housing.position.set(0, poleHeight - 0.15, 0.4 * s);  // Extend in Z direction
     lamp.add(housing);
     
-    // Small glowing bulb
-    const bulbGeom = new THREE.SphereGeometry(0.08 * scale, 6, 6);
+    // Small glowing bulb - also moved to Z direction
+    const bulbGeom = new THREE.SphereGeometry(0.08 * s, 6, 6);
     const bulbMat = new THREE.MeshBasicMaterial({ 
       color: 0xffdd88,
       transparent: true,
       opacity: 0.9
     });
     const bulb = new THREE.Mesh(bulbGeom, bulbMat);
-    bulb.position.set(0.4 * scale, poleHeight - 0.25, 0);
+    bulb.position.set(0, poleHeight - 0.25, 0.4 * s);  // Extend in Z direction
     lamp.add(bulb);
     
     // Subtle light (reduced intensity)
-    const light = new THREE.PointLight(0xffdd88, 0.5, 5 * scale);
-    light.position.set(0.4 * scale, poleHeight - 0.25, 0);
+    const light = new THREE.PointLight(0xffdd88, 0.5, 5 * s);
+    light.position.set(0.4 * s, poleHeight - 0.25, 0);
     lamp.add(light);
     
     return lamp;
