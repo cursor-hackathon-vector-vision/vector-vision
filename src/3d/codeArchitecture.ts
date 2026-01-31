@@ -691,7 +691,7 @@ export class CodeArchitecture {
   }
   
   private createStreetCats(): void {
-    // Create many cute orange cats on the side lanes
+    // Create many cute orange cats walking on SIDEWALKS
     const catColors = [
       0xff8c42, // Orange
       0xffb366, // Light orange
@@ -703,27 +703,29 @@ export class CodeArchitecture {
       0xcc5500, // Burnt orange
     ];
     
-    // Main street side lanes (left and right edges)
-    const sideLanes = [
-      { x: -4, name: 'left' },   // Left side of main street
-      { x: 4, name: 'right' },   // Right side of main street
+    // Sidewalk positions (z-axis) - roadWidth=12, sidewalkWidth=2
+    // Sidewalks are at z = +-(6+1) = +-7
+    const sidewalks = [
+      { z: 7, name: 'north' },   // North sidewalk
+      { z: -7, name: 'south' },  // South sidewalk
     ];
     
-    // Create 8 cats total - 4 on each side
+    // Create 8 cats total - walking along x-axis on sidewalks
     for (let i = 0; i < 8; i++) {
       const color = catColors[i % catColors.length];
-      const startZ = -80 + (i * 25) + (Math.random() - 0.5) * 15;
-      const lane = sideLanes[i % 2];
-      const startX = lane.x + (Math.random() - 0.5) * 1.5; // Slight variation
+      const startX = -150 + (i * 40) + (Math.random() - 0.5) * 20;
+      const sidewalk = sidewalks[i % 2];
+      const startZ = sidewalk.z + (Math.random() - 0.5) * 1; // Slight variation on sidewalk
       
       const cat = this.createLowPolyCat(color);
-      cat.group.position.set(startX, 0, startZ);
+      cat.group.position.set(startX, 0.05, startZ); // Slightly above ground
       
-      // Store which lane the cat is on
-      cat.group.userData.laneX = lane.x;
+      // Store which sidewalk the cat is on
+      cat.group.userData.sidewalkZ = sidewalk.z;
+      cat.group.userData.walkAxis = 'x'; // Cats walk along x-axis now
       
-      // Set initial rotation based on direction
-      cat.group.rotation.y = cat.direction > 0 ? 0 : Math.PI;
+      // Set initial rotation based on direction (walking along x-axis)
+      cat.group.rotation.y = cat.direction > 0 ? Math.PI / 2 : -Math.PI / 2;
       
       this.cats.push(cat);
       this.scene.add(cat.group);
@@ -944,20 +946,21 @@ export class CodeArchitecture {
       cat.walkPhase += delta * cat.speed * 8;
       cat.tailPhase += delta * 3;
       
-      // Move cat along the street
-      const newZ = cat.group.position.z + cat.direction * cat.speed * delta;
+      // Move cat along sidewalk (x-axis)
+      const newX = cat.group.position.x + cat.direction * cat.speed * delta;
       
       // Reverse direction at street ends
-      if (newZ > 100 || newZ < -100) {
+      if (newX > 180 || newX < -180) {
         cat.direction *= -1;
-        cat.group.rotation.y = cat.direction > 0 ? 0 : Math.PI;
+        // Rotate to face walking direction (along x-axis)
+        cat.group.rotation.y = cat.direction > 0 ? Math.PI / 2 : -Math.PI / 2;
       }
       
-      cat.group.position.z = newZ;
+      cat.group.position.x = newX;
       
-      // Stay on the assigned lane with slight wobble
-      const laneX = cat.group.userData.laneX || 0;
-      cat.group.position.x = laneX + Math.sin(cat.walkPhase * 0.3) * 0.4;
+      // Stay on the assigned sidewalk with slight wobble
+      const sidewalkZ = cat.group.userData.sidewalkZ || 7;
+      cat.group.position.z = sidewalkZ + Math.sin(cat.walkPhase * 0.3) * 0.3;
       
       // Animate legs
       cat.group.children.forEach(child => {

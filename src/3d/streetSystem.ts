@@ -81,7 +81,7 @@ export function createStreetNetwork(
 }
 
 /**
- * Create the main Timeline Highway
+ * Create the main Timeline Highway with sidewalks
  */
 function createTimelineHighway(length: number): THREE.Group {
   const group = new THREE.Group();
@@ -89,6 +89,8 @@ function createTimelineHighway(length: number): THREE.Group {
   
   // Road base - dark asphalt
   const roadWidth = 12;
+  const sidewalkWidth = 2;
+  
   const roadGeom = new THREE.PlaneGeometry(length, roadWidth, 100, 1);
   const roadMat = new THREE.MeshStandardMaterial({
     color: 0x1a1a2e,
@@ -100,12 +102,39 @@ function createTimelineHighway(length: number): THREE.Group {
   road.position.y = 0.02;
   group.add(road);
   
+  // SIDEWALKS on both sides - where cats walk!
+  for (const side of [-1, 1]) {
+    const sidewalkGeom = new THREE.PlaneGeometry(length, sidewalkWidth);
+    const sidewalkMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a3e,
+      roughness: 0.9,
+      metalness: 0.1,
+    });
+    const sidewalk = new THREE.Mesh(sidewalkGeom, sidewalkMat);
+    sidewalk.rotation.x = -Math.PI / 2;
+    sidewalk.position.set(0, 0.04, side * (roadWidth / 2 + sidewalkWidth / 2));
+    sidewalk.userData = { isSidewalk: true, side };
+    group.add(sidewalk);
+    
+    // Sidewalk curb edge glow
+    const curbGeom = new THREE.PlaneGeometry(length, 0.2);
+    const curbMat = new THREE.MeshBasicMaterial({
+      color: 0x4fc3f7,
+      transparent: true,
+      opacity: 0.7,
+    });
+    const curb = new THREE.Mesh(curbGeom, curbMat);
+    curb.rotation.x = -Math.PI / 2;
+    curb.position.set(0, 0.05, side * roadWidth / 2);
+    group.add(curb);
+  }
+  
   // Center lane - glowing cyan stripe
-  const centerStripeGeom = new THREE.PlaneGeometry(length, 0.3, 1, 1);
+  const centerStripeGeom = new THREE.PlaneGeometry(length, 0.4, 1, 1);
   const centerStripeMat = new THREE.MeshBasicMaterial({
     color: 0x00ffff,
     transparent: true,
-    opacity: 0.9,
+    opacity: 0.95,
   });
   const centerStripe = new THREE.Mesh(centerStripeGeom, centerStripeMat);
   centerStripe.rotation.x = -Math.PI / 2;
@@ -114,7 +143,7 @@ function createTimelineHighway(length: number): THREE.Group {
   
   // Side lanes - dashed lines
   const dashCount = Math.floor(length / 8);
-  for (let side of [-1, 1]) {
+  for (const side of [-1, 1]) {
     for (let i = 0; i < dashCount; i++) {
       const dashGeom = new THREE.PlaneGeometry(4, 0.15);
       const dashMat = new THREE.MeshBasicMaterial({
@@ -129,30 +158,18 @@ function createTimelineHighway(length: number): THREE.Group {
     }
   }
   
-  // Edge glow strips
-  for (let side of [-1, 1]) {
-    const edgeGeom = new THREE.PlaneGeometry(length, 0.5);
-    const edgeMat = new THREE.MeshBasicMaterial({
-      color: 0x00ffff,
-      transparent: true,
-      opacity: 0.4,
-    });
-    const edge = new THREE.Mesh(edgeGeom, edgeMat);
-    edge.rotation.x = -Math.PI / 2;
-    edge.position.set(0, 0.025, side * (roadWidth / 2 - 0.25));
-    group.add(edge);
-    
-    // Glow tube along edge
+  // Outer edge glow tubes on sidewalk edges
+  for (const side of [-1, 1]) {
     const tubePoints = [
-      new THREE.Vector3(-halfLength, 0.3, side * roadWidth / 2),
-      new THREE.Vector3(halfLength, 0.3, side * roadWidth / 2),
+      new THREE.Vector3(-halfLength, 0.2, side * (roadWidth / 2 + sidewalkWidth)),
+      new THREE.Vector3(halfLength, 0.2, side * (roadWidth / 2 + sidewalkWidth)),
     ];
     const tubeCurve = new THREE.CatmullRomCurve3(tubePoints);
-    const tubeGeom = new THREE.TubeGeometry(tubeCurve, 64, 0.08, 8, false);
+    const tubeGeom = new THREE.TubeGeometry(tubeCurve, 64, 0.06, 8, false);
     const tubeMat = new THREE.MeshBasicMaterial({
       color: 0x00ffff,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.5,
     });
     const tube = new THREE.Mesh(tubeGeom, tubeMat);
     group.add(tube);
@@ -160,93 +177,141 @@ function createTimelineHighway(length: number): THREE.Group {
   
   // Time markers along the road (like a timeline)
   for (let i = -5; i <= 5; i++) {
-    if (i === 0) continue; // Skip center
+    if (i === 0) continue;
     
     const markerX = i * (length / 12);
     
-    // Vertical marker
-    const markerGeom = new THREE.BoxGeometry(0.2, 1.5, 0.2);
+    // Vertical marker on sidewalk
+    const markerGeom = new THREE.BoxGeometry(0.15, 1.2, 0.15);
     const markerMat = new THREE.MeshStandardMaterial({
       color: 0x4fc3f7,
       emissive: new THREE.Color(0x4fc3f7),
       emissiveIntensity: 0.5,
     });
     const marker = new THREE.Mesh(markerGeom, markerMat);
-    marker.position.set(markerX, 0.75, roadWidth / 2 + 1);
+    marker.position.set(markerX, 0.6, roadWidth / 2 + sidewalkWidth - 0.3);
     group.add(marker);
     
     // Mirror on other side
     const marker2 = marker.clone();
-    marker2.position.z = -roadWidth / 2 - 1;
+    marker2.position.z = -(roadWidth / 2 + sidewalkWidth - 0.3);
     group.add(marker2);
   }
+  
+  // Store sidewalk positions for cat walking
+  group.userData = { 
+    roadWidth, 
+    sidewalkWidth,
+    sidewalkZ: [roadWidth / 2 + sidewalkWidth / 2, -(roadWidth / 2 + sidewalkWidth / 2)]
+  };
   
   return group;
 }
 
 /**
- * Create an access road from main highway to district
+ * Create an access road from main highway to district - same style as main road
  */
-function createAccessRoad(start: THREE.Vector3, end: THREE.Vector3, color: number): THREE.Group {
+function createAccessRoad(start: THREE.Vector3, end: THREE.Vector3, _color: number): THREE.Group {
   const group = new THREE.Group();
   
   const direction = end.clone().sub(start);
   const length = direction.length();
-  const roadWidth = 4;
+  const roadWidth = 8;
+  const sidewalkWidth = 1.5;
   
-  // Curved path for more organic look
-  const midPoint = start.clone().add(end).multiplyScalar(0.5);
-  midPoint.x += (Math.random() - 0.5) * 10;
-  
-  const curve = new THREE.QuadraticBezierCurve3(start, midPoint, end);
-  
-  // Road surface as tube
-  const tubeGeom = new THREE.TubeGeometry(curve, 32, roadWidth / 2, 4, false);
-  const tubeMat = new THREE.MeshStandardMaterial({
+  // Straight road surface
+  const roadGeom = new THREE.PlaneGeometry(roadWidth, length);
+  const roadMat = new THREE.MeshStandardMaterial({
     color: 0x1a1a2e,
     roughness: 0.8,
     metalness: 0.2,
-    side: THREE.DoubleSide,
   });
-  const tube = new THREE.Mesh(tubeGeom, tubeMat);
-  tube.position.y = -roadWidth / 2 + 0.1;
-  tube.scale.y = 0.05;
-  group.add(tube);
+  const road = new THREE.Mesh(roadGeom, roadMat);
+  road.rotation.x = -Math.PI / 2;
   
-  // Center stripe following curve
-  const stripeGeom = new THREE.TubeGeometry(curve, 32, 0.1, 4, false);
+  // Position and rotate to align
+  const center = start.clone().add(end).multiplyScalar(0.5);
+  road.position.copy(center);
+  road.position.y = 0.02;
+  road.rotation.z = Math.atan2(direction.x, direction.z);
+  group.add(road);
+  
+  // Center stripe - glowing cyan
+  const stripeGeom = new THREE.PlaneGeometry(0.3, length);
   const stripeMat = new THREE.MeshBasicMaterial({
-    color: color,
+    color: 0x00ffff,
     transparent: true,
-    opacity: 0.8,
+    opacity: 0.9,
   });
   const stripe = new THREE.Mesh(stripeGeom, stripeMat);
-  stripe.position.y = 0.05;
+  stripe.rotation.x = -Math.PI / 2;
+  stripe.position.copy(center);
+  stripe.position.y = 0.03;
+  stripe.rotation.z = road.rotation.z;
   group.add(stripe);
   
-  // Edge glow lines
-  const points = curve.getPoints(50);
-  const lineMat = new THREE.LineBasicMaterial({
-    color: color,
-    transparent: true,
-    opacity: 0.5,
-  });
-  
-  // Offset for edges
-  for (let side of [-1, 1]) {
-    const offsetPoints = points.map(p => {
-      const tangent = curve.getTangentAt(points.indexOf(p) / points.length);
-      const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
-      return p.clone().add(normal.multiplyScalar(side * roadWidth / 2));
+  // Sidewalks on both sides
+  for (const side of [-1, 1]) {
+    const sidewalkGeom = new THREE.PlaneGeometry(sidewalkWidth, length);
+    const sidewalkMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a3e,
+      roughness: 0.9,
+      metalness: 0.1,
     });
-    const edgeGeom = new THREE.BufferGeometry().setFromPoints(offsetPoints);
-    const edge = new THREE.Line(edgeGeom, lineMat.clone());
-    edge.position.y = 0.1;
+    const sidewalk = new THREE.Mesh(sidewalkGeom, sidewalkMat);
+    sidewalk.rotation.x = -Math.PI / 2;
+    sidewalk.position.copy(center);
+    sidewalk.position.y = 0.04;
+    sidewalk.rotation.z = road.rotation.z;
+    
+    // Offset perpendicular to road direction
+    const perpendicular = new THREE.Vector3(-direction.z, 0, direction.x).normalize();
+    sidewalk.position.add(perpendicular.multiplyScalar(side * (roadWidth / 2 + sidewalkWidth / 2)));
+    group.add(sidewalk);
+    
+    // Sidewalk edge glow
+    const edgeGeom = new THREE.PlaneGeometry(0.15, length);
+    const edgeMat = new THREE.MeshBasicMaterial({
+      color: 0x4fc3f7,
+      transparent: true,
+      opacity: 0.6,
+    });
+    const edge = new THREE.Mesh(edgeGeom, edgeMat);
+    edge.rotation.x = -Math.PI / 2;
+    edge.position.copy(sidewalk.position);
+    edge.position.y = 0.05;
+    edge.rotation.z = road.rotation.z;
     group.add(edge);
   }
   
-  // Store curve for animation
-  group.userData = { curve, color, length };
+  // Dashed lane markings
+  const dashCount = Math.floor(length / 6);
+  for (let i = 0; i < dashCount; i++) {
+    for (const side of [-1, 1]) {
+      const dashGeom = new THREE.PlaneGeometry(3, 0.12);
+      const dashMat = new THREE.MeshBasicMaterial({
+        color: 0x4fc3f7,
+        transparent: true,
+        opacity: 0.6,
+      });
+      const dash = new THREE.Mesh(dashGeom, dashMat);
+      dash.rotation.x = -Math.PI / 2;
+      
+      // Position along road
+      const t = (i + 0.5) / dashCount;
+      const pos = start.clone().lerp(end, t);
+      dash.position.copy(pos);
+      dash.position.y = 0.03;
+      dash.rotation.z = road.rotation.z;
+      
+      // Offset to lane
+      const perpendicular = new THREE.Vector3(-direction.z, 0, direction.x).normalize();
+      dash.position.add(perpendicular.multiplyScalar(side * 2));
+      group.add(dash);
+    }
+  }
+  
+  group.userData = { length, direction };
   
   return group;
 }

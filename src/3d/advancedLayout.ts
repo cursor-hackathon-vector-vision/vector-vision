@@ -391,7 +391,7 @@ export class AdvancedLayoutEngine {
 }
 
 /**
- * Create 3D meshes for districts (ground plates)
+ * Create 3D meshes for districts - minimal, just border outline
  */
 export function createDistrictMesh(district: DistrictLayout): THREE.Group {
   const group = new THREE.Group();
@@ -401,38 +401,50 @@ export function createDistrictMesh(district: DistrictLayout): THREE.Group {
   const centerX = (district.x0 + district.x1) / 2;
   const centerZ = (district.y0 + district.y1) / 2;
   
-  // Ground plate
-  const plateGeometry = new THREE.BoxGeometry(width, 0.2, depth);
-  const plateMaterial = new THREE.MeshStandardMaterial({
-    color: district.color,
-    emissive: new THREE.Color(district.color),
-    emissiveIntensity: 0.3,
-    roughness: 0.8,
-    metalness: 0.2,
-    transparent: true,
-    opacity: 0.85,
-  });
+  // Just a thin outline on the ground - no solid plate
+  const outlinePoints = [
+    new THREE.Vector3(district.x0, 0.02, district.y0),
+    new THREE.Vector3(district.x1, 0.02, district.y0),
+    new THREE.Vector3(district.x1, 0.02, district.y1),
+    new THREE.Vector3(district.x0, 0.02, district.y1),
+    new THREE.Vector3(district.x0, 0.02, district.y0),
+  ];
   
-  const plate = new THREE.Mesh(plateGeometry, plateMaterial);
-  plate.position.set(centerX, -0.1, centerZ);
-  plate.receiveShadow = true;
-  group.add(plate);
-  
-  // Glowing border
-  const borderGeometry = new THREE.EdgesGeometry(plateGeometry);
-  const borderMaterial = new THREE.LineBasicMaterial({
+  const outlineGeom = new THREE.BufferGeometry().setFromPoints(outlinePoints);
+  const outlineMat = new THREE.LineBasicMaterial({
     color: 0x00ffff,
     transparent: true,
-    opacity: 0.8,
+    opacity: 0.6,
   });
-  const border = new THREE.LineSegments(borderGeometry, borderMaterial);
-  border.position.copy(plate.position);
-  group.add(border);
+  const outline = new THREE.Line(outlineGeom, outlineMat);
+  group.add(outline);
   
-  // District label
-  const label = createDistrictLabel(district.directory, width);
-  label.position.set(centerX, 0.5, centerZ);
-  group.add(label);
+  // Corner markers (small glowing dots)
+  const corners = [
+    new THREE.Vector3(district.x0, 0.1, district.y0),
+    new THREE.Vector3(district.x1, 0.1, district.y0),
+    new THREE.Vector3(district.x1, 0.1, district.y1),
+    new THREE.Vector3(district.x0, 0.1, district.y1),
+  ];
+  
+  for (const corner of corners) {
+    const dotGeom = new THREE.SphereGeometry(0.3, 8, 8);
+    const dotMat = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.8,
+    });
+    const dot = new THREE.Mesh(dotGeom, dotMat);
+    dot.position.copy(corner);
+    group.add(dot);
+  }
+  
+  // District label - only for larger districts
+  if (width > 15 && depth > 15) {
+    const label = createDistrictLabel(district.directory, width);
+    label.position.set(centerX, 0.5, centerZ);
+    group.add(label);
+  }
   
   return group;
 }

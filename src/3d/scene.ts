@@ -41,7 +41,8 @@ export class SceneManager {
     // Initialize scene
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0a0a0f);
-    this.scene.fog = new THREE.Fog(0x0a0a0f, 50, 150);
+    // Fog extended for larger scenes
+    this.scene.fog = new THREE.Fog(0x0a0a0f, 100, 800);
     
     // Initialize camera
     const aspect = container.clientWidth / container.clientHeight;
@@ -77,7 +78,7 @@ export class SceneManager {
     this.controls.dampingFactor = 0.05;
     this.controls.screenSpacePanning = true;
     this.controls.minDistance = 5;
-    this.controls.maxDistance = 100;
+    this.controls.maxDistance = 500;
     this.controls.maxPolarAngle = Math.PI / 2 - 0.1;
     this.controls.target.set(0, 0, 0);
     
