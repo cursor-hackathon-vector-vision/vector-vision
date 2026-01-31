@@ -142,18 +142,24 @@ class VectorVisionApp {
     });
   }
 
+  // Default demo project - Vector Vision itself!
+  private static readonly DEMO_PROJECT_PATH = '/mnt/private1/ai-projects/hackathon-cursor-vector-vision/vector-vision';
+  
   private async initBackend(): Promise<void> {
     const statusEl = document.getElementById('backend-status')!;
     
     this.backendAvailable = await checkBackendAvailable();
     
     if (this.backendAvailable) {
-      statusEl.textContent = 'Backend connected - Browse or enter path';
+      statusEl.textContent = 'Backend connected - Loading demo...';
       statusEl.classList.add('connected');
       statusEl.classList.remove('disconnected');
       
-      // Load initial directory (use root since we're in browser)
-      this.browseTo('/');
+      // Auto-load Vector Vision project as demo
+      this.pathInput.value = VectorVisionApp.DEMO_PROJECT_PATH;
+      await this.loadProjectFromPath(VectorVisionApp.DEMO_PROJECT_PATH);
+      
+      statusEl.textContent = 'Backend connected - Vector Vision loaded';
     } else {
       statusEl.textContent = 'Backend offline - Use drag & drop or demo';
       statusEl.classList.add('disconnected');
