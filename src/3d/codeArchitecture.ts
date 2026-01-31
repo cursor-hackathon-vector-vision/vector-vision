@@ -1025,13 +1025,42 @@ export class CodeArchitecture {
     this.effectsGroup.add(particles);
   }
   
+  // Cache for city layout - prevents rebuilding every frame
+  private lastCityHash: string = '';
+  private isCityBuilt: boolean = false;
+  
   /**
-   * Update from snapshot with file contents
+   * Update from snapshot with file contents (OPTIMIZED!)
+   * Only rebuilds when project structure changes
    */
   public async updateFromSnapshot(
     snapshot: ProjectSnapshot, 
     fileContents?: Record<string, { content: string; lines: string[]; functions: string[]; imports: string[] }>
   ): Promise<void> {
+    // Create hash to detect if we need to rebuild
+    const cityHash = snapshot.files.map(f => f.path).sort().join('|');
+    
+    // OPTIMIZATION: Only rebuild city when files change
+    if (cityHash !== this.lastCityHash || !this.isCityBuilt) {
+      console.log('[City] FULL REBUILD - files changed');
+      await this.rebuildCityLayout(snapshot, fileContents);
+      this.lastCityHash = cityHash;
+      this.isCityBuilt = true;
+    } else {
+      // FAST UPDATE: Just update building visibility
+      this.updateBuildingVisibility(snapshot);
+    }
+  }
+  
+  /**
+   * Full city rebuild (expensive - only when project structure changes)
+   */
+  private async rebuildCityLayout(
+    snapshot: ProjectSnapshot,
+    fileContents?: Record<string, { content: string; lines: string[]; functions: string[]; imports: string[] }>
+  ): Promise<void> {
+    const startTime = performance.now();
+    
     const currentPaths = new Set(snapshot.files.map(f => f.path));
     
     // Remove buildings for deleted files
@@ -1042,9 +1071,7 @@ export class CodeArchitecture {
       }
     }
     
-    // === GROWING CITY LAYOUT ===
-    
-    // Prepare file data with timestamps
+    // Prepare file data
     const growingFileData = snapshot.files.map(f => ({
       path: f.path,
       name: f.name,
@@ -1054,24 +1081,25 @@ export class CodeArchitecture {
       createdAt: f.createdAt instanceof Date ? f.createdAt.getTime() : undefined
     }));
     
-    // Calculate growing city layout
+    // Calculate layout ONCE
     this.growingLayout = this.growingCityEngine.calculateLayout(growingFileData);
     
-    // Clear and recreate elements
+    // Clear and recreate
     this.clearCityElements();
     
-    // Create roads (curved with dashed center lines and sidewalks)
+    // Create roads
     for (const road of this.growingLayout.roads) {
       const roadMesh = createGrowingRoad(road);
       this.streetGroup.add(roadMesh);
     }
     
-    // Create decorations (trees, lamps, cats!)
-    const decorationsGroup = createGrowingDecorations(this.growingLayout.decorations);
+    // Create decorations (SIMPLIFIED for performance)
+    const decorationsGroup = createGrowingDecorations(
+      this.growingLayout.decorations.slice(0, 50) // Limit decorations
+    );
     this.decorationGroup.add(decorationsGroup);
     
-    // Create position lookup from growing layout
-    // Buildings float slightly above ground (0.15) to avoid z-fighting with streets
+    // Create position lookup
     const positionMap = new Map<string, { pos: THREE.Vector3; rotation: number }>();
     for (const pos of this.growingLayout.buildings) {
       positionMap.set(pos.file.path, { 
@@ -1080,8 +1108,9 @@ export class CodeArchitecture {
       });
     }
     
-    // Create or update buildings
-    for (const file of snapshot.files) {
+    // Create buildings (limit to first 100 for performance)
+    const filesToRender = snapshot.files.slice(0, 100);
+    for (const file of filesToRender) {
       const fileWithContent: FileWithContent = { ...file };
       
       if (fileContents && fileContents[file.path]) {
@@ -1102,14 +1131,23 @@ export class CodeArchitecture {
       }
     }
     
-    // Clear connection arcs (simplified - no complex arcs for now)
-    this.clearConnectionArcs();
+    // Skip connections during playback (expensive)
+    // this.updateConnections(fileContents);
     
-    // Update connections based on imports (legacy)
-    this.updateConnections(fileContents);
+    console.log('[City] Full rebuild took', (performance.now() - startTime).toFixed(1), 'ms');
+  }
+  
+  /**
+   * Fast visibility update for buildings
+   */
+  private updateBuildingVisibility(snapshot: ProjectSnapshot): void {
+    const currentPaths = new Set(snapshot.files.map(f => f.path));
     
-    // Create chat visualizations
-    this.visualizeChats(snapshot.chats);
+    // Show/hide buildings based on current snapshot
+    for (const [path, building] of this.buildings) {
+      building.mesh.visible = currentPaths.has(path);
+      if (building.glowMesh) building.glowMesh.visible = currentPaths.has(path);
+    }
   }
   
   /**
@@ -1769,7 +1807,7 @@ export class CodeArchitecture {
     }
   }
   
-  private clearConnectionArcs(): void {
+  private _clearConnectionArcs(): void {
     for (const arc of this.connectionArcs) {
       this.connectionGroup.remove(arc);
       arc.traverse((child) => {
@@ -1963,7 +2001,7 @@ export class CodeArchitecture {
     }
   }
   
-  private updateConnections(fileContents?: Record<string, { content: string; lines: string[]; functions: string[]; imports: string[] }>): void {
+  private _updateConnections(fileContents?: Record<string, { content: string; lines: string[]; functions: string[]; imports: string[] }>): void {
     // Clear old connections
     for (const conn of this.connections) {
       this.connectionGroup.remove(conn.line);
@@ -2068,7 +2106,7 @@ export class CodeArchitecture {
     this.connectionGroup.add(particles);
   }
   
-  private visualizeChats(chats: ChatMessage[]): void {
+  private _visualizeChats(chats: ChatMessage[]): void {
     // Clear old chat particles
     for (const particles of this.chatParticles) {
       this.effectsGroup.remove(particles);
@@ -2180,134 +2218,65 @@ export class CodeArchitecture {
     animate();
   }
   
+  // Frame counter for throttling expensive operations
+  private frameCount: number = 0;
+  
   /**
-   * Animation update
+   * Animation update (OPTIMIZED for 60fps!)
    */
   public update(delta: number): void {
     this.time += delta;
+    this.frameCount++;
     
-    // NEW: Animate message timeline elements
+    // OPTIMIZATION: Only run expensive animations every 3rd frame
+    const isAnimationFrame = this.frameCount % 3 === 0;
+    
+    // Skip most animations during fast playback
+    if (!isAnimationFrame) return;
+    
+    // NEW: Animate message timeline elements (throttled)
     if (this.messageTimelineMode && this.timelineLayout) {
-      this.animateTimeline(this.time);
-      this.updateAnimals(delta);
+      // Skip timeline animation during playback - too expensive
+      // this.animateTimeline(this.time);
+      
+      // Only update a few animals per frame
+      if (this.frameCount % 6 === 0) {
+        this.updateAnimals(delta * 3);
+      }
     }
     
-    // Animate buildings
+    // OPTIMIZED: Only animate visible buildings, max 20 per frame
+    let animatedCount = 0;
     for (const building of this.buildings.values()) {
+      if (!building.mesh.visible || animatedCount >= 20) continue;
+      animatedCount++;
+      
       // Smooth rise animation for new buildings
       if (building.currentY < building.targetY - 0.01) {
-        building.currentY += (building.targetY - building.currentY) * 0.05;
+        building.currentY += (building.targetY - building.currentY) * 0.1;
         building.group.position.y = building.currentY;
       }
       
-      // Pulse effect for active buildings
+      // Simple pulse for active buildings (no material changes - expensive!)
       if (building.isNew || building.fileNode.status === 'modified') {
-        const pulse = Math.sin(this.time * 2 + building.pulsePhase) * 0.08 + 1;
+        const pulse = Math.sin(this.time * 2 + building.pulsePhase) * 0.05 + 1;
         building.mesh.scale.setScalar(pulse);
-        
-        const material = building.mesh.material as THREE.MeshStandardMaterial;
-        material.emissiveIntensity = 0.25 + Math.sin(this.time * 3 + building.pulsePhase) * 0.15;
       }
       
-      // Floating label
-      building.label.position.y = building.height + 1.2 + Math.sin(this.time + building.pulsePhase) * 0.15;
-      
-      // Animate data streams (vertical particles)
-      building.group.children.forEach(child => {
-        if (child instanceof THREE.Points && child.userData.isDataStream) {
-          const positions = child.geometry.attributes.position.array as Float32Array;
-          const speed = child.userData.speed || 1;
-          const height = child.userData.height || 10;
-          
-          for (let i = 0; i < positions.length / 3; i++) {
-            positions[i * 3 + 1] += delta * speed; // Move up
-            if (positions[i * 3 + 1] > height) {
-              positions[i * 3 + 1] = 0; // Reset to bottom
-              positions[i * 3] = (Math.random() - 0.5) * 0.5;
-              positions[i * 3 + 2] = (Math.random() - 0.5) * 0.5;
-            }
-          }
-          child.geometry.attributes.position.needsUpdate = true;
-        }
-      });
+      // Skip label animation - static is fine
+      // Skip data stream animation - too expensive
     }
     
-    // Animate connections (traveling particles)
-    for (const conn of this.connections) {
-      const from = this.buildings.get(conn.from);
-      const to = this.buildings.get(conn.to);
-      if (!from || !to) continue;
-      
-      const positions = conn.particlePositions;
-      const particleCount = positions.length / 3;
-      
-      for (let i = 0; i < particleCount; i++) {
-        const t = ((this.time * 0.5 + i / particleCount) % 1);
-        
-        const fromPos = from.position;
-        const toPos = to.position;
-        const midY = Math.max(fromPos.y, toPos.y) + 5;
-        
-        // Quadratic bezier interpolation
-        const x = (1 - t) * (1 - t) * fromPos.x + 2 * (1 - t) * t * ((fromPos.x + toPos.x) / 2) + t * t * toPos.x;
-        const y = (1 - t) * (1 - t) * (fromPos.y + 2) + 2 * (1 - t) * t * midY + t * t * (toPos.y + 2);
-        const z = (1 - t) * (1 - t) * fromPos.z + 2 * (1 - t) * t * ((fromPos.z + toPos.z) / 2) + t * t * toPos.z;
-        
-        positions[i * 3] = x;
-        positions[i * 3 + 1] = y;
-        positions[i * 3 + 2] = z;
-      }
-      
-      conn.particles.geometry.attributes.position.needsUpdate = true;
+    // SKIP connection particle animation - way too expensive
+    // Commented out for performance
+    
+    // PERFORMANCE: Skip all particle animations during playback
+    // They are too expensive for smooth playback
+    
+    // Update our cute street cats (throttled)
+    if (this.frameCount % 6 === 0) {
+      this.updateCats(delta * 3);
     }
-    
-    // Animate chat particles (orbit)
-    for (const particles of this.chatParticles) {
-      const { basePos, phase } = particles.userData;
-      const positions = particles.geometry.attributes.position.array as Float32Array;
-      const particleCount = positions.length / 3;
-      
-      for (let i = 0; i < particleCount; i++) {
-        const angle = this.time + phase + (i / particleCount) * Math.PI * 2;
-        const radius = 1.5 + Math.sin(this.time * 2 + i) * 0.5;
-        
-        positions[i * 3] = basePos.x + Math.cos(angle) * radius;
-        positions[i * 3 + 1] = basePos.y + Math.sin(this.time * 0.5 + i * 0.3) * 2;
-        positions[i * 3 + 2] = basePos.z + Math.sin(angle) * radius;
-      }
-      
-      particles.geometry.attributes.position.needsUpdate = true;
-    }
-    
-    // Animate ambient particles (slow drift)
-    const ambientParticles = this.effectsGroup.children.find(c => c instanceof THREE.Points && !c.userData.chat) as THREE.Points;
-    if (ambientParticles) {
-      const positions = ambientParticles.geometry.attributes.position.array as Float32Array;
-      for (let i = 0; i < positions.length / 3; i++) {
-        positions[i * 3 + 1] += Math.sin(this.time * 0.2 + i) * 0.01;
-        
-        // Wrap around
-        if (positions[i * 3 + 1] > 55) positions[i * 3 + 1] = 5;
-        if (positions[i * 3 + 1] < 5) positions[i * 3 + 1] = 55;
-      }
-      ambientParticles.geometry.attributes.position.needsUpdate = true;
-    }
-    
-    // Animate pulsing rings on branch connections
-    this.groundGroup.children.forEach(child => {
-      if (child.userData.pulse) {
-        const scale = 1 + Math.sin(this.time * 2) * 0.3;
-        child.scale.setScalar(scale);
-        const mesh = child as THREE.Mesh;
-        if (mesh.material) {
-          const mat = mesh.material as THREE.MeshBasicMaterial;
-          mat.opacity = 0.5 - Math.sin(this.time * 2) * 0.3;
-        }
-      }
-    });
-    
-    // Update our cute street cats!
-    this.updateCats(delta);
     
     // Update street light flickering
     this.updateStreetLightFlicker();
@@ -2414,12 +2383,35 @@ export class CodeArchitecture {
     }, 500);
   }
   
+  // Cache for performance - only rebuild when project changes
+  private lastProjectHash: string = '';
+  private isTimelineBuilt: boolean = false;
+  
   /**
-   * UPDATE WITH MESSAGE TIMELINE SYSTEM
-   * The new way - messages drive the visualization!
+   * UPDATE WITH MESSAGE TIMELINE SYSTEM (OPTIMIZED!)
+   * Only rebuilds when the project changes, not on every snapshot!
    */
   public updateWithMessageTimeline(snapshot: ProjectSnapshot): void {
-    console.log('[MessageTimeline] Starting update with', snapshot.chats.length, 'chats and', snapshot.files.length, 'files');
+    // Create a hash to detect if we need to rebuild
+    const projectHash = `${snapshot.files.length}-${snapshot.chats.length}`;
+    
+    // OPTIMIZATION: Only rebuild the full scene when project changes
+    if (projectHash !== this.lastProjectHash || !this.isTimelineBuilt) {
+      console.log('[MessageTimeline] FULL REBUILD for new project');
+      this.rebuildTimelineScene(snapshot);
+      this.lastProjectHash = projectHash;
+      this.isTimelineBuilt = true;
+    }
+    
+    // FAST UPDATE: Just update visibility based on current snapshot
+    this.updateTimelineVisibility(snapshot);
+  }
+  
+  /**
+   * Full rebuild of the timeline scene (expensive - only when project changes)
+   */
+  private rebuildTimelineScene(snapshot: ProjectSnapshot): void {
+    const startTime = performance.now();
     
     // Convert data to timeline format
     const messages: MessageData[] = snapshot.chats.map(chat => ({
@@ -2440,45 +2432,150 @@ export class CodeArchitecture {
       createdAt: snapshot.timestamp.getTime(),
     }));
     
-    // Calculate new layout
+    // Calculate layout ONCE
     this.timelineLayout = this.messageTimelineEngine.calculateLayout(messages, files);
     
-    console.log('[MessageTimeline] Layout generated:', {
-      timelineElements: this.timelineLayout.timeline.length,
-      districts: this.timelineLayout.districts.length,
-      animalSpawns: this.timelineLayout.animals.length,
-    });
-    
-    // Clear old timeline elements
+    // Clear old elements
     this.timelineGroup.clear();
     this.messageMarkers.clear();
     this.tokenTrees.clear();
-    
-    // Clear old animals from decoration group
-    this.animals.forEach(animal => {
-      this.decorationGroup.remove(animal.group);
-    });
+    this.animals.forEach(animal => this.decorationGroup.remove(animal.group));
     this.animals = [];
     
-    // Render timeline elements (messages + trees)
-    this.renderTimelineElements(this.timelineLayout);
-    console.log('[MessageTimeline] Rendered', this.messageMarkers.size, 'messages and', this.tokenTrees.size, 'trees');
+    // Render all timeline elements (but hidden initially)
+    this.renderTimelineElementsOptimized(this.timelineLayout);
     
-    // Render districts
+    // Render districts ONCE
     this.renderDistricts(this.timelineLayout);
     
-    // Spawn animals (NEW system - additional to existing cats)
+    // Spawn animals ONCE
     this.spawnAnimals(this.timelineLayout);
-    console.log('[MessageTimeline] Spawned', this.animals.length, 'animals');
     
-    // Still render buildings using existing system
+    // Update buildings ONCE
     this.updateFromSnapshot(snapshot);
+    
+    console.log('[MessageTimeline] Full rebuild took', (performance.now() - startTime).toFixed(1), 'ms');
+  }
+  
+  /**
+   * Fast visibility update (cheap - runs every snapshot change)
+   */
+  private updateTimelineVisibility(snapshot: ProjectSnapshot): void {
+    const currentChatIds = new Set(snapshot.chats.map(c => c.id));
+    
+    // Show/hide message markers based on current snapshot
+    this.messageMarkers.forEach((marker, id) => {
+      const shouldShow = currentChatIds.has(id);
+      marker.visible = shouldShow;
+      
+      // Animate the latest message
+      if (shouldShow && snapshot.chats.length > 0) {
+        const isLatest = id === snapshot.chats[snapshot.chats.length - 1].id;
+        if (isLatest) {
+          // Pulse effect for latest message
+          marker.scale.setScalar(1.2);
+        } else {
+          marker.scale.setScalar(1.0);
+        }
+      }
+    });
+    
+    // Show token trees up to current point
+    let treeIndex = 0;
+    this.tokenTrees.forEach((tree, id) => {
+      // Show trees for messages we've seen
+      const messageId = id.replace('tree-', '');
+      tree.visible = currentChatIds.has(messageId);
+      treeIndex++;
+    });
+  }
+  
+  /**
+   * Optimized rendering - uses simpler geometries and fewer objects
+   */
+  private renderTimelineElementsOptimized(layout: MessageTimelineLayout): void {
+    // Limit the number of rendered elements for performance
+    const maxElements = 200;
+    let count = 0;
+    
+    for (const element of layout.timeline) {
+      if (count >= maxElements) break;
+      
+      if (element.type === 'message') {
+        const messageData = element.data as MessageData;
+        // Use simplified marker for performance
+        const marker = this.createSimpleMessageMarker(messageData);
+        marker.position.copy(element.position);
+        marker.visible = false; // Hidden initially
+        
+        this.timelineGroup.add(marker);
+        this.messageMarkers.set(messageData.id, marker);
+        count++;
+      } else if (element.type === 'tree') {
+        const treeData = element.data as import('./messageTimeline').TreeData;
+        // Use simplified tree for performance
+        const tree = this.createSimpleTokenTree(treeData);
+        tree.position.copy(element.position);
+        tree.visible = false; // Hidden initially
+        
+        this.timelineGroup.add(tree);
+        this.tokenTrees.set(`tree-${treeData.messageId}`, tree);
+        count++;
+      }
+    }
+  }
+  
+  /**
+   * Simple message marker (much cheaper than full version)
+   */
+  private createSimpleMessageMarker(message: MessageData): THREE.Group {
+    const group = new THREE.Group();
+    
+    const colors = { user: 0x667eea, assistant: 0x48bb78, system: 0xf39c12 };
+    const color = colors[message.role] || colors.user;
+    
+    // Simple sphere - no fancy materials
+    const geom = new THREE.SphereGeometry(0.6, 8, 8); // Lower poly
+    const mat = new THREE.MeshBasicMaterial({ color }); // No lighting calc
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.y = 1;
+    group.add(mesh);
+    
+    group.userData.messageData = message;
+    group.userData.isMessage = true;
+    
+    return group;
+  }
+  
+  /**
+   * Simple token tree (much cheaper than full version)
+   */
+  private createSimpleTokenTree(treeData: import('./messageTimeline').TreeData): THREE.Group {
+    const group = new THREE.Group();
+    
+    const scale = Math.max(0.5, Math.min(2, treeData.size));
+    
+    // Simple trunk
+    const trunkGeom = new THREE.CylinderGeometry(0.1 * scale, 0.15 * scale, scale, 6);
+    const trunkMat = new THREE.MeshBasicMaterial({ color: 0x8b4513 });
+    const trunk = new THREE.Mesh(trunkGeom, trunkMat);
+    trunk.position.y = scale / 2;
+    group.add(trunk);
+    
+    // Simple foliage
+    const foliageGeom = new THREE.ConeGeometry(0.5 * scale, scale, 6);
+    const foliageMat = new THREE.MeshBasicMaterial({ color: 0x228b22 });
+    const foliage = new THREE.Mesh(foliageGeom, foliageMat);
+    foliage.position.y = scale * 1.2;
+    group.add(foliage);
+    
+    return group;
   }
   
   /**
    * Render timeline elements (messages and token trees)
    */
-  private renderTimelineElements(layout: MessageTimelineLayout): void {
+  private _renderTimelineElements(layout: MessageTimelineLayout): void {
     for (const element of layout.timeline) {
       if (element.type === 'message') {
         const messageData = element.data as MessageData;
@@ -2631,7 +2728,7 @@ export class CodeArchitecture {
   /**
    * Animate timeline elements
    */
-  private animateTimeline(time: number): void {
+  private _animateTimeline(time: number): void {
     // Animate messages
     for (const marker of this.messageMarkers.values()) {
       animateMessage(marker, time);
