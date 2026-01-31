@@ -9,6 +9,9 @@ export interface CursorChat {
   content: string;
   model?: string;
   relatedFiles: string[];
+  tokenCost?: number; // Estimated token cost for this message
+  inputTokens?: number;
+  outputTokens?: number;
 }
 
 export interface CursorData {
@@ -173,13 +176,31 @@ function messageToChat(item: unknown, id: string): CursorChat {
   const content = String(msg.content);
   const relatedFiles = extractFilePaths(content);
   
+  // Extract token information if available
+  const inputTokens = typeof msg.input_tokens === 'number' ? msg.input_tokens : 
+                      typeof msg.inputTokens === 'number' ? msg.inputTokens : undefined;
+  const outputTokens = typeof msg.output_tokens === 'number' ? msg.output_tokens :
+                       typeof msg.outputTokens === 'number' ? msg.outputTokens : undefined;
+  
+  // Estimate token cost if not provided
+  let tokenCost: number | undefined;
+  if (inputTokens !== undefined || outputTokens !== undefined) {
+    tokenCost = (inputTokens || 0) + (outputTokens || 0);
+  } else if (msg.role === 'assistant') {
+    // Rough estimate: ~1 token per 4 characters
+    tokenCost = Math.ceil(content.length / 4);
+  }
+  
   return {
     id,
     timestamp: new Date(msg.timestamp as number || msg.created_at as number || Date.now()),
     role: msg.role === 'assistant' ? 'assistant' : msg.role === 'system' ? 'system' : 'user',
     content: truncateContent(content),
     model: msg.model as string | undefined,
-    relatedFiles
+    relatedFiles,
+    tokenCost,
+    inputTokens,
+    outputTokens
   };
 }
 
