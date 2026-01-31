@@ -19,7 +19,7 @@ import type { ProjectData, Building } from './types';
 type VisualizationMode = 'city' | 'neural' | 'architecture';
 
 // API base URL
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = 'http://localhost:3333/api';
 
 // ============================================
 // MAIN APPLICATION
@@ -152,8 +152,8 @@ class VectorVisionApp {
       statusEl.classList.add('connected');
       statusEl.classList.remove('disconnected');
       
-      // Load initial directory
-      this.browseTo(process.env.HOME || '/');
+      // Load initial directory (use root since we're in browser)
+      this.browseTo('/');
     } else {
       statusEl.textContent = 'Backend offline - Use drag & drop or demo';
       statusEl.classList.add('disconnected');

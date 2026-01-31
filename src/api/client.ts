@@ -2,7 +2,7 @@
  * API Client for Vector Vision Backend
  */
 
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = 'http://localhost:3333/api';
 
 export interface ApiResponse<T> {
   success: boolean;

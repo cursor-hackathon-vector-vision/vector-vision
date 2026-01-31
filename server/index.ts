@@ -4,11 +4,12 @@ import { scanProject } from './projectScanner';
 import { getGitHistory } from './gitParser';
 import { getCursorData } from './cursorParser';
 import { discoverCursorProjects, getProjectConversations, quickScanForCursor } from './cursorDiscovery';
+import { getUniversalHistory } from './universalHistoryParser';
 import path from 'path';
 import fs from 'fs';
 
 const app = express();
-const PORT = 3001;
+const PORT = 3333;
 
 app.use(cors());
 app.use(express.json());
@@ -46,8 +47,11 @@ app.post('/api/scan', async (req, res) => {
     // Get Git history
     const gitHistory = await getGitHistory(resolvedPath);
     
-    // Get Cursor data
+    // Get Cursor data (legacy parser for backward compat)
     const cursorData = await getCursorData(resolvedPath);
+    
+    // Get Universal History (new comprehensive parser)
+    const universalHistory = await getUniversalHistory(resolvedPath);
     
     // Build response
     const projectName = path.basename(resolvedPath);
@@ -59,7 +63,9 @@ app.post('/api/scan', async (req, res) => {
         path: resolvedPath,
         files,
         gitHistory,
-        cursorData
+        cursorData,
+        // New: Universal history with all sources
+        history: universalHistory
       }
     });
     
@@ -67,6 +73,39 @@ app.post('/api/scan', async (req, res) => {
     console.error('Scan error:', error);
     res.status(500).json({ 
       error: 'Failed to scan project',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+// Get universal history for a project (all sources: transcripts, DB, JSON)
+app.post('/api/history', async (req, res) => {
+  try {
+    const { projectPath } = req.body;
+    
+    if (!projectPath) {
+      return res.status(400).json({ error: 'Project path is required' });
+    }
+    
+    const resolvedPath = path.resolve(projectPath);
+    
+    if (!fs.existsSync(resolvedPath)) {
+      return res.status(404).json({ error: 'Path does not exist' });
+    }
+    
+    console.log(`Getting universal history for: ${resolvedPath}`);
+    
+    const history = await getUniversalHistory(resolvedPath);
+    
+    res.json({
+      success: true,
+      history
+    });
+    
+  } catch (error) {
+    console.error('History error:', error);
+    res.status(500).json({ 
+      error: 'Failed to get history',
       details: error instanceof Error ? error.message : 'Unknown error'
     });
   }
