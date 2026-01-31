@@ -13,7 +13,7 @@ import { loadProjectFromBackend, checkBackendAvailable } from './data/projectLoa
 import { api } from './api/client';
 import { UIPanels } from './ui/panels';
 import { DiscoveryPanel } from './ui/discovery';
-import type { ProjectData, Building } from './types';
+import type { ProjectData, Building, ProjectSnapshot } from './types';
 
 // Visualization mode
 type VisualizationMode = 'city' | 'neural' | 'architecture';
@@ -65,6 +65,13 @@ class VectorVisionApp {
   private statCommits: HTMLElement;
   private statLines: HTMLElement;
   private statChats: HTMLElement;
+  
+  // Token Counter & Message Popup
+  private tokenCountEl: HTMLElement;
+  private tokenCostEl: HTMLElement;
+  private messagePopup: HTMLElement;
+  private totalTokens: number = 0;
+  private lastSnapshotIndex: number = -1;
 
   constructor() {
     // Get DOM elements
@@ -82,6 +89,11 @@ class VectorVisionApp {
     this.statCommits = document.getElementById('stat-commits')!;
     this.statLines = document.getElementById('stat-lines')!;
     this.statChats = document.getElementById('stat-chats')!;
+    
+    // Token Counter & Message Popup
+    this.tokenCountEl = document.getElementById('token-count')!;
+    this.tokenCostEl = document.getElementById('token-cost')!;
+    this.messagePopup = document.getElementById('message-popup')!;
     
     this.init();
   }
@@ -292,6 +304,9 @@ class VectorVisionApp {
       
       const projectData = await loadProjectFromBackend(projectPath);
       
+      // Reset token counter for new project
+      this.resetTokenCounter();
+      
       // Update store
       store.getState().setProjectData(projectData);
       
@@ -336,6 +351,9 @@ class VectorVisionApp {
         snapshots,
         currentIndex: snapshots.length - 1
       };
+      
+      // Reset token counter for new project
+      this.resetTokenCounter();
       
       // Update store
       store.getState().setProjectData(projectData);
@@ -603,23 +621,24 @@ class VectorVisionApp {
         
         if (projectData) {
           this.currentProjectPath = selfPath;
+          this.resetTokenCounter();
           store.getState().setProjectData(projectData);
           this.updateStats(projectData);
           this.updateTimeline(projectData);
           
-          // Start from latest snapshot
-          const latestIndex = projectData.snapshots.length - 1;
-          store.getState().setCurrentSnapshot(latestIndex);
-          this.onSnapshotChange(latestIndex);
+          // Start from BEGINNING for replay effect! (index 0)
+          store.getState().setCurrentSnapshot(0);
+          this.onSnapshotChange(0);
           
-          this.showToast('🎉 Visualizing ITSELF! Meta-Demo loaded!');
-          console.log('[Demo] Loaded', projectData.snapshots.length, 'snapshots');
+          this.showToast('🎉 Visualizing ITSELF! Press Space to replay!');
+          console.log('[Demo] Loaded', projectData.snapshots.length, 'message-snapshots');
           return;
         }
       }
       
       // Fallback to generated demo data if backend unavailable
       console.log('[Demo] Backend unavailable, using generated demo data');
+      this.resetTokenCounter();
       const projectData = generateDemoProject();
       store.getState().setProjectData(projectData);
       this.updateStats(projectData);
@@ -794,6 +813,9 @@ class VectorVisionApp {
     this.commitMessage.textContent = snapshot.commitMessage;
     this.commitMeta.textContent = `${snapshot.author} • ${this.formatDate(snapshot.timestamp)}`;
     
+    // 🎬 SHOW MESSAGE POPUP & UPDATE TOKEN COUNTER
+    this.showMessagePopup(snapshot, index);
+    
     // Update 3D visualization with file contents
     if (this.codeArchitecture) {
       // Load file contents if we have a project path
@@ -826,6 +848,107 @@ class VectorVisionApp {
     this.statFiles.textContent = snapshot.files.length.toString();
     this.statLines.textContent = this.formatNumber(totalLines);
     this.statChats.textContent = snapshot.chats.length.toString();
+  }
+  
+  /**
+   * Show message popup and update token counter during replay
+   */
+  private showMessagePopup(snapshot: ProjectSnapshot, index: number): void {
+    // Get the latest message from this snapshot
+    const latestChat = snapshot.chats[snapshot.chats.length - 1];
+    if (!latestChat) return;
+    
+    // Only show popup if we're moving forward (not backward)
+    const isForward = index > this.lastSnapshotIndex;
+    this.lastSnapshotIndex = index;
+    
+    // Calculate tokens for this step
+    const prevChats = index > 0 ? 
+      getState().projectData?.snapshots[index - 1]?.chats || [] : [];
+    const newChats = snapshot.chats.filter(
+      c => !prevChats.some(p => p.id === c.id)
+    );
+    
+    // Sum up token costs from new messages
+    const newTokens = newChats.reduce((sum, chat) => {
+      // Estimate token cost if not provided
+      const cost = (chat as any).tokenCost || Math.ceil(chat.content.length / 4);
+      return sum + cost;
+    }, 0);
+    
+    // Update total tokens (only when moving forward)
+    if (isForward && newTokens > 0) {
+      this.totalTokens += newTokens;
+      this.animateTokenCounter(newTokens);
+    }
+    
+    // Update token display
+    this.tokenCountEl.textContent = this.formatNumber(this.totalTokens);
+    // Estimate cost: ~$0.015 per 1K tokens (average)
+    const estimatedCost = (this.totalTokens / 1000) * 0.015;
+    this.tokenCostEl.textContent = estimatedCost.toFixed(2);
+    
+    // Show message popup
+    const roleIcon = latestChat.role === 'user' ? '👤' : '🤖';
+    const popup = this.messagePopup;
+    
+    // Update popup content
+    popup.querySelector('.message-popup-icon')!.textContent = roleIcon;
+    popup.querySelector('.message-popup-role')!.textContent = 
+      latestChat.role === 'user' ? 'User' : 'Assistant';
+    popup.querySelector('.message-popup-text')!.textContent = 
+      latestChat.content.slice(0, 200) + (latestChat.content.length > 200 ? '...' : '');
+    popup.querySelector('.cost-tokens')!.textContent = 
+      newTokens > 0 ? `+${this.formatNumber(newTokens)}` : '—';
+    
+    // Set role class for styling
+    popup.classList.remove('user', 'assistant', 'hidden');
+    popup.classList.add(latestChat.role);
+    
+    // Animate in
+    requestAnimationFrame(() => {
+      popup.classList.add('visible');
+    });
+    
+    // Auto-hide after delay (unless playing)
+    if (!getState().isPlaying) {
+      setTimeout(() => {
+        popup.classList.remove('visible');
+      }, 3000);
+    }
+  }
+  
+  /**
+   * Animate the token counter when tokens are added
+   */
+  private animateTokenCounter(_addedTokens: number): void {
+    // Add counting animation class
+    this.tokenCountEl.classList.add('counting');
+    
+    // Flash the counter
+    const counter = document.getElementById('token-counter');
+    if (counter) {
+      counter.style.transform = 'translateX(-50%) scale(1.05)';
+      counter.style.borderColor = 'rgba(255, 235, 59, 0.8)';
+      
+      setTimeout(() => {
+        counter.style.transform = 'translateX(-50%) scale(1)';
+        counter.style.borderColor = 'rgba(255, 193, 7, 0.3)';
+        this.tokenCountEl.classList.remove('counting');
+      }, 300);
+    }
+  }
+  
+  /**
+   * Reset token counter when loading new project
+   */
+  private resetTokenCounter(): void {
+    this.totalTokens = 0;
+    this.lastSnapshotIndex = -1;
+    this.tokenCountEl.textContent = '0';
+    this.tokenCostEl.textContent = '0.00';
+    this.messagePopup.classList.add('hidden');
+    this.messagePopup.classList.remove('visible');
   }
 
   private onSceneUpdate(delta: number): void {
