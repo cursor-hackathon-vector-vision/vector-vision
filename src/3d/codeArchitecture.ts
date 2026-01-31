@@ -1030,26 +1030,34 @@ export class CodeArchitecture {
   private isCityBuilt: boolean = false;
   
   /**
+   * Reset the scene for a new project
+   * Call this when loading a new project!
+   */
+  public resetForNewProject(): void {
+    console.log('[CodeArchitecture] Resetting for new project');
+    this.isCityBuilt = false;
+    this.isTimelineBuilt = false;
+    this.lastCityHash = '';
+    this.lastProjectHash = '';
+  }
+  
+  /**
    * Update from snapshot with file contents (OPTIMIZED!)
-   * Only rebuilds when project structure changes
+   * Only rebuilds ONCE per project load
    */
   public async updateFromSnapshot(
     snapshot: ProjectSnapshot, 
     fileContents?: Record<string, { content: string; lines: string[]; functions: string[]; imports: string[] }>
   ): Promise<void> {
-    // Create hash to detect if we need to rebuild
-    const cityHash = snapshot.files.map(f => f.path).sort().join('|');
-    
-    // OPTIMIZATION: Only rebuild city when files change
-    if (cityHash !== this.lastCityHash || !this.isCityBuilt) {
-      console.log('[City] FULL REBUILD - files changed');
+    // OPTIMIZATION: Only rebuild city ONCE when first called
+    // Don't rebuild during timeline playback!
+    if (!this.isCityBuilt) {
+      console.log('[City] INITIAL BUILD');
       await this.rebuildCityLayout(snapshot, fileContents);
-      this.lastCityHash = cityHash;
+      this.lastCityHash = `${snapshot.files.length}`;
       this.isCityBuilt = true;
-    } else {
-      // FAST UPDATE: Just update building visibility
-      this.updateBuildingVisibility(snapshot);
     }
+    // Skip visibility updates during playback - buildings stay visible
   }
   
   /**
@@ -2393,14 +2401,21 @@ export class CodeArchitecture {
    */
   public updateWithMessageTimeline(snapshot: ProjectSnapshot): void {
     // Create a hash to detect if we need to rebuild
-    const projectHash = `${snapshot.files.length}-${snapshot.chats.length}`;
+    // Use ONLY chat count since files may vary per snapshot
+    const projectHash = `${snapshot.chats.length}`;
     
-    // OPTIMIZATION: Only rebuild the full scene when project changes
-    if (projectHash !== this.lastProjectHash || !this.isTimelineBuilt) {
-      console.log('[MessageTimeline] FULL REBUILD for new project');
+    // OPTIMIZATION: Only rebuild the full scene when project changes (new chat count)
+    // This prevents rebuild when just navigating through timeline
+    if (!this.isTimelineBuilt) {
+      console.log('[MessageTimeline] INITIAL BUILD');
       this.rebuildTimelineScene(snapshot);
       this.lastProjectHash = projectHash;
       this.isTimelineBuilt = true;
+    } else if (Math.abs(parseInt(projectHash) - parseInt(this.lastProjectHash)) > 10) {
+      // Only rebuild if chat count changed significantly (new project loaded)
+      console.log('[MessageTimeline] REBUILD - major change detected');
+      this.rebuildTimelineScene(snapshot);
+      this.lastProjectHash = projectHash;
     }
     
     // FAST UPDATE: Just update visibility based on current snapshot
@@ -2598,18 +2613,35 @@ export class CodeArchitecture {
   }
   
   /**
-   * Render districts with their streets and decorations
+   * Render districts with their streets and decorations (OPTIMIZED!)
    */
   private renderDistricts(layout: MessageTimelineLayout): void {
+    // PERFORMANCE: Limit districts to prevent lag
+    const maxDistricts = 5;
+    const maxStreetsPerDistrict = 3;
+    const maxDecorationsPerDistrict = 10;
+    
+    let districtCount = 0;
     for (const district of layout.districts) {
-      // Render district streets
+      if (districtCount >= maxDistricts) break;
+      districtCount++;
+      
+      // Render limited district streets
+      let streetCount = 0;
       for (const street of district.streets) {
+        if (streetCount >= maxStreetsPerDistrict) break;
+        streetCount++;
+        
         const road = this.createDistrictRoad(street);
         this.streetGroup.add(road);
       }
       
-      // Render decorations
+      // Render limited decorations
+      let decoCount = 0;
       for (const deco of district.decorations) {
+        if (decoCount >= maxDecorationsPerDistrict) break;
+        decoCount++;
+        
         let mesh: THREE.Group;
         
         switch (deco.type) {

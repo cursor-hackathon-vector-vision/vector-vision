@@ -1015,12 +1015,15 @@ class VectorVisionApp {
   }
   
   /**
-   * Reset token counter when loading new project
+   * Reset token counter and 3D scene when loading new project
    */
   private resetTokenCounter(): void {
     this.totalTokens = 0;
     this.lastSnapshotIndex = -1;
     this.tokenCountEl.textContent = '0';
+    
+    // Also reset the 3D scene for new project
+    this.codeArchitecture?.resetForNewProject();
     this.tokenCostEl.textContent = '0.00';
     this.messagePopup.classList.add('hidden');
     this.messagePopup.classList.remove('visible');
